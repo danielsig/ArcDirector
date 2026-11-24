@@ -66,6 +66,16 @@ export type Command =
 	| { op:'renderStats' }
 	| { op:'saveGame' }
 	| { op:'loadGame' }
+	/** For testing: `character` falls dead at once, struck down by `by` (default: itself), as any blow that fells. */
+	| { op:'kill'; character:string; by?:string }
+	/** For testing: put `character`, or any thing by name, at `x`, `z` on the ground. */
+	| { op:'teleport'; character:string; x:number; z:number }
+	/**
+	 * For testing, to inspect animation frames: the game holds still `at` seconds after `character` starts `verb`'s
+	 * move (wound up over `windUp` s, default the verb's own, at `target`), or `at` seconds from now with no `verb`.
+	 * `at: null` lets the game run again.
+	 */
+	| { op:'scrub'; character:string; verb?:string; target?:string; windUp?:number; at:number | null }
 	/**
 	 * Camera follows whom `focus` (watch syntax, as the player sees them) picks; `''` stops. `zoom` is the distance in meters.
 	 * `view` puts the player, the camera's rig, at x, y, z facing yaw, as the URL `view` does.

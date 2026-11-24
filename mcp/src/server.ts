@@ -172,6 +172,27 @@ async function main():Promise<void> {
 		return text(await hub.call(session, { op: 'loadGame' }));
 	});
 
+	server.registerTool('kill', {
+		description: 'For testing: a character falls dead at once, struck down by `by` (default: itself), as any blow that fells: its mind stops and everyone who sees it hears of the fall.',
+		inputSchema: { session: sessionField, character: z.string().min(1), by: z.string().min(1).optional() },
+	}, async ({ session, character, by }) => {
+		return text(await hub.call(session, { op: 'kill', character, by }));
+	});
+
+	server.registerTool('teleport', {
+		description: 'For testing: put a character, or any thing by name, at x, z on the ground (meters, as the URL view). What it was walking to it walks to from there.',
+		inputSchema: { session: sessionField, character: z.string().min(1), x: z.number(), z: z.number() },
+	}, async ({ session, character, x, z: atZ }) => {
+		return text(await hub.call(session, { op: 'teleport', character, x, z: atZ }));
+	});
+
+	server.registerTool('scrub', {
+		description: 'For testing, to inspect animation frames: the game holds still `at` seconds after a character starts a verb\'s move (wound up over `windUp` s, default the verb\'s own, at `target`), or `at` seconds from now with no verb. Shoot each frame, then scrub again; `at: null` lets the game run.',
+		inputSchema: { session: sessionField, character: z.string().min(1), verb: z.string().min(1).optional(), target: z.string().min(1).optional(), windUp: z.number().positive().optional(), at: z.number().min(0).nullable() },
+	}, async ({ session, character, verb, target, windUp, at }) => {
+		return text(await hub.call(session, { op: 'scrub', character, verb, target, windUp, at }));
+	});
+
 	server.registerTool('complete', {
 		description: 'Chat completion against LM Studio. Does not need a game client.',
 		inputSchema: {

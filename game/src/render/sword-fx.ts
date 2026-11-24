@@ -20,11 +20,11 @@ const LANCE_WIDTH = 0.025;
 const LANCE_STAGGER = 0.04;
 
 /**
- * A white crescent swept between two edges of a swing: `inner[i]` near the hilt and `outer[i]` past
- * the tip, at the same moment `i` of the swing, first to last.
+ * A white crescent swept between two edges of a swing: `inner[i]` along the blade and `outer[i]` at
+ * its tip, at the same moment `i` of the swing, first to last; it grows as they do while `tracing` says so.
  */
-export function slashTrail(scene:THREE.Object3D, inner:THREE.Vector3[], outer:THREE.Vector3[]):void {
-	sweep(scene, inner, outer, SLASH);
+export function slashTrail(scene:THREE.Object3D, inner:THREE.Vector3[], outer:THREE.Vector3[], tracing:()=>boolean):void {
+	sweep(scene, inner, outer, SLASH, tracing);
 }
 
 /**

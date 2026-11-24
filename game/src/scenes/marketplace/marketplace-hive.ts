@@ -1,5 +1,6 @@
-import { yawToForward, type GameObject, type XZ } from '@arc-director/kindling';
-import type { MemoryDraft } from 'arc-director';
+import { yawToForward, yawToward, type GameObject, type XZ } from '@arc-director/kindling';
+import type { CharacterSpec, MemoryDraft } from 'arc-director';
+import type { CharacterCtx } from '../../director/game-types';
 import { MarketplaceNPC, Named, idOf } from '../../engine/components';
 import { DemoMeshRenderer } from '../../engine/demo-mesh-renderer';
 import type { DemoWorld } from '../../engine/demo-world';
@@ -82,15 +83,23 @@ export function guardPost(world:DemoWorld, guard:GameObject):XZ | undefined {
 	const side = index % 2 === 0 ? -1 : 1;
 	const span = 1 + Math.floor(index / 2);
 	const p = gate.transform.position;
-	const passageX = gate.getComponent(Door)?.axis === 'z' ? 0 : 1;
-	const passageZ = passageX === 0 ? 1 : 0;
-	const clear = (sign:number) => world.terrain.sample(p.x + passageX * sign, p.z + passageZ * sign)?.blocked === false;
-	const inward = clear(1) ? 1 : -1;
+	const into = intoSquare(world, gate);
 	return {
-		x: p.x + passageX * inward + passageZ * side * span,
-		z: p.z + passageZ * inward + passageX * side * span,
+		x: p.x + into.x + Math.abs(into.z) * side * span,
+		z: p.z + into.z + Math.abs(into.x) * side * span,
 	};
 }
+
+/** A step along `gate`'s passage into the square: toward the open ground on its inner side. */
+export function intoSquare(world:DemoWorld, gate:GameObject):XZ {
+	const p = gate.transform.position;
+	const along = gate.getComponent(Door)?.axis === 'z' ? { x: 0, z: 1 } : { x: 1, z: 0 };
+	const inward = world.terrain.sample(p.x + along.x, p.z + along.z)?.blocked === false ? 1 : -1;
+	return { x: along.x * inward, z: along.z * inward };
+}
+
+/** How far behind a gate's middle, on the street side of its opening, shoppers come in and go out (m). */
+export const BEHIND_GATE = 0.4;
 
 /**
  * A guard of the `Guards`, at map cell `cell` by `gate`: it holds the gate until a thief or a security cry shows. A law
@@ -113,15 +122,18 @@ function guard(id:string, gate:string, cell:[number, number], yaw:number):CastMe
 	};
 }
 
-/** A shopper's tags: wanting each of `wants` until bought, and leaving by `gate`. */
-function shopperTags(wants:string[], gate:string):string[] {
-	return ['Shopper', 'wanting', ...wants, gate];
+/**
+ * Shopper `id` as the hive gets it: tagged wanting each of `wants` until bought and leaving by `gate`, and with the
+ * role a mind of its own reads (`withOwnMind`), so asked what it sells, it knows it came to buy.
+ */
+function shopperSpec(id:string, wants:string[], gate:string):CharacterSpec<CharacterCtx> {
+	return { id, tags: ['Shopper', 'wanting', ...wants, gate], identity: { role: 'Shopper' } };
 }
 
 /** A shopper of the `MarketplaceHive` at map cell `cell` with `wallet` gold, come for `wants`, who leaves by `gate`. */
 function shopper(id:string, meshID:string, cell:[number, number], wallet:number, wants:string[], gate:string, extra:Partial<NPCSpawnDef> = {}):CastMember {
 	const body:Omit<NPCSpawnDef, 'id'> = { meshID, cell, wallet, marketplaceNPC: { kind: 'customer', wants, leaveGate: gate }, ...extra };
-	return { id, tags: shopperTags(wants, gate), of: 'MarketplaceHive', body };
+	return { ...shopperSpec(id, wants, gate), of: 'MarketplaceHive', body };
 }
 
 /**
@@ -301,7 +313,8 @@ function pickName(world:DemoWorld):string | null {
 	return free[Math.floor(Math.random() * free.length)];
 }
 
-export function spawnRandomCustomer(world:DemoWorld):{ go:GameObject; id:string; tags:string[] } | null {
+/** A new shopper in through a gate, at random: its spec for the hive, or null when the square has no name or gate to spare. */
+export function spawnRandomCustomer(world:DemoWorld):CharacterSpec<CharacterCtx> | null {
 	const id = pickName(world);
 	if (!id) {
 		return null;
@@ -314,23 +327,20 @@ export function spawnRandomCustomer(world:DemoWorld):{ go:GameObject; id:string;
 	}
 	const leaveGate = spawnGate.getComponent(Named)?.id === 'WestGate' ? 'EastGate' : 'WestGate';
 	const { tx, tz } = world.terrain.tileCoordAt(spawnGate.transform.position.x, spawnGate.transform.position.z);
-	// Past the jamb and the guards. The opening is a passage, not a lobby.
-	const inward = spawnGate.getComponent(Named)?.id === 'WestGate' ? 4 : -4;
+	// Behind the gate, facing in: it walks in from the street.
+	const into = intoSquare(world, spawnGate);
 	const template = TEMPLATES[Math.floor(Math.random() * TEMPLATES.length)];
 	const [low, high] = purseFor(template.wants);
 	const wallet = low + Math.floor(Math.random() * (high - low + 1));
-	const go = spawnNPC(world, {
+	spawnNPC(world, {
 		id,
 		meshID: pickMesh(world),
-		cell: [tx + inward, tz],
-		yaw: inward > 0 ? Math.PI / 2 : -Math.PI / 2,
+		cell: [tx, tz],
+		offset: { x: -into.x * BEHIND_GATE, z: -into.z * BEHIND_GATE },
+		yaw: yawToward(into.x, into.z),
 		packLoot: template.loot ? [template.loot] : undefined,
 		wallet,
 		marketplaceNPC: { kind: 'customer', wants: [...template.wants], leaveGate },
 	});
-	return {
-		go,
-		id,
-		tags: shopperTags(template.wants, leaveGate),
-	};
+	return shopperSpec(id, template.wants, leaveGate);
 }

@@ -14,62 +14,105 @@ export function otherHand(hand:Hand):Hand {
 }
 
 /**
- * How a prop sits in a hand. Props stand up their long axis (+Y of the prop's root); the fist
- * closes around it. Angles are for a hand at rest (the T-pose: palm down, fist pointing ahead).
+ * How a prop sits in the right hand (the left holds it mirrored): `handle`, where on the prop the fist closes, in the
+ * prop's own space (default: its `Grip` node, else its origin), and `turn`, the prop's turn with the hand at rest (the
+ * T-pose, in the body's frame: x right, y up, z back).
  */
-export type Grip = {
-	/** Where the hand closes, as a fraction of the prop's height (default 0.5). A prop with a `Grip` node is held there instead. */
-	at?:number;
-	/** Turn of the long axis (radians) from straight out of the fist toward the elbow. */
-	tilt?:number;
-	/** Turn about the long axis. At 0 the prop's +X points up the arm, toward the elbow (a Tripo bow's string toward the archer). */
-	roll?:number;
-};
+export interface Grip {
+	handle?:THREE.Vector3;
+	turn:THREE.Quaternion;
+}
+
+/**
+ * Where a held prop goes: its handle `at` and its `turn`, and the point the elbow bends toward (unset: the way the clip
+ * bent it). In world space for {@link holdAt}; a host may author them in a body's own frame and place them.
+ */
+export interface HeldPose {
+	at:THREE.Vector3;
+	turn:THREE.Quaternion;
+	elbow?:THREE.Vector3;
+}
+
+/** A turn of `x`, `y` and `z` degrees about those axes, in `THREE.Euler`'s order: how grips and held poses are written. */
+export function degrees(x:number, y:number, z:number):THREE.Quaternion {
+	const d = THREE.MathUtils.DEG2RAD;
+	return new THREE.Quaternion().setFromEuler(new THREE.Euler(x * d, y * d, z * d));
+}
+
+/** `turn` (in a body's frame) as the left hand holds what the right holds turned so: mirrored across the body's middle. */
+export function mirrored(turn:THREE.Quaternion):THREE.Quaternion {
+	return new THREE.Quaternion(turn.x, -turn.y, -turn.z, turn.w);
+}
 
 const worldTurn = new THREE.Quaternion();
 const parentTurn = new THREE.Quaternion();
 
 /**
- * Puts `prop` (an instance of a registered model) in `root`'s hand, as a child of the hand bone, so
- * it follows every clip. Returns false (and does nothing) when `root` has no such hand.
+ * Puts `prop` (an instance of a registered model) in `root`'s hand as `grip` says, as a child of the hand bone, so it
+ * follows every clip. Returns false (and does nothing) when `root` has no such hand.
  */
-export function holdInHand(root:THREE.Object3D, hand:Hand, prop:THREE.Object3D, grip:Grip = {}):boolean {
+export function holdInHand(root:THREE.Object3D, hand:Hand, prop:THREE.Object3D, grip:Grip):boolean {
 	const bone = humanBone(root, `${hand}Hand`);
 	const turn = bone && restTurn(root, bone.name);
-	if (!bone || !turn) {
+	const fist = fistOf(root, hand);
+	if (!bone || !turn || !fist) {
 		return false;
 	}
-	const { at = 0.5, tilt = 0, roll = 0 } = grip;
-	// The hand at rest, in the root's frame (facing −Z, the model's right on +X): the arm points out
-	// to its side, the fist ahead.
-	const elbow = new THREE.Vector3(hand === 'left' ? 1 : -1, 0, 0);
-	const axis = new THREE.Vector3(0, 0, -1).multiplyScalar(Math.cos(tilt)).addScaledVector(elbow, Math.sin(tilt));
-	const side = elbow.clone().addScaledVector(axis, -elbow.dot(axis)).normalize().applyAxisAngle(axis, roll);
-	const held = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(side, axis, new THREE.Vector3().crossVectors(side, axis)));
-	const rotation = turn.clone().invert().multiply(held);
-
-	// The grip point in the prop root's space.
-	prop.position.set(0, 0, 0);
-	prop.quaternion.identity();
-	prop.scale.setScalar(1);
 	prop.updateMatrixWorld(true);
-	const gripNode = prop.getObjectByName('Grip');
-	const box = new THREE.Box3().setFromObject(prop);
-	const point = gripNode ? gripNode.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3(0, THREE.MathUtils.lerp(box.min.y, box.max.y, at), 0);
-
-	// The palm: halfway to the middle finger's knuckle, a little below the bones.
-	const knuckle = humanBone(root, `${hand}MiddleProximal`)?.position ?? new THREE.Vector3();
-	const down = new THREE.Vector3(0, -1, 0).applyQuaternion(turn.clone().invert());
-	const palm = knuckle.clone().multiplyScalar(0.5).addScaledVector(down, 0.3 * knuckle.length());
-
+	const node = prop.getObjectByName('Grip');
+	const handle = grip.handle?.clone() ?? (node ? prop.worldToLocal(node.getWorldPosition(new THREE.Vector3())) : new THREE.Vector3());
+	prop.quaternion.copy(turn.clone().invert().multiply(hand === 'right' ? grip.turn : mirrored(grip.turn)));
 	// Undo the character's scale, so the prop keeps its own size.
 	root.updateMatrixWorld(true);
-	const scale = 1 / bone.getWorldScale(new THREE.Vector3()).x;
-	prop.quaternion.copy(rotation);
-	prop.scale.setScalar(scale);
-	prop.position.copy(palm).sub(point.multiplyScalar(scale).applyQuaternion(rotation));
+	prop.scale.setScalar(1 / bone.getWorldScale(new THREE.Vector3()).x);
+	prop.position.copy(fist).sub(handle.multiply(prop.scale).applyQuaternion(prop.quaternion));
 	bone.add(prop);
 	return true;
+}
+
+/**
+ * Holds `prop`, put in `root`'s `hand` by {@link holdInHand}, as `pose` says (world), `weight` of the way (0–1) from
+ * where the clip has it: the hand takes the turn that carries the prop so, the forearm turning about itself as far as
+ * the hand turns about it, and the arm reaches ({@link reach}) to put the handle at `pose.at`.
+ */
+export function holdAt(root:THREE.Object3D, hand:Hand, prop:THREE.Object3D, pose:HeldPose, weight:number):void {
+	const upper = humanBone(root, `${hand}UpperArm`);
+	const lower = humanBone(root, `${hand}LowerArm`);
+	const bone = humanBone(root, `${hand}Hand`);
+	const lowerRest = lower && restTurn(root, lower.name);
+	const handRest = bone && restTurn(root, bone.name);
+	const fist = fistOf(root, hand);
+	if (!upper || !lower || !bone || !lowerRest || !handRest || !fist || weight <= 0) {
+		return;
+	}
+	root.updateMatrixWorld(true);
+	const w = Math.min(1, weight);
+	// The hand's turn that carries the prop so: the prop's, less its turn in the hand.
+	const want = pose.turn.clone().multiply(prop.quaternion.clone().invert());
+	const wrist = pose.at.clone().sub(fist.multiplyScalar(bone.getWorldScale(new THREE.Vector3()).x).applyQuaternion(want));
+	const shoulder = upper.getWorldPosition(new THREE.Vector3());
+	reach(root, hand, wrist, w, pose.elbow ? pose.elbow.clone().sub(shoulder) : null);
+	const now = bone.getWorldQuaternion(new THREE.Quaternion());
+	const goal = now.clone().slerp(want, w);
+	// Its turn from a straight wrist, about the forearm, goes to the forearm.
+	const straight = lower.getWorldQuaternion(new THREE.Quaternion()).multiply(lowerRest.clone().invert().multiply(handRest));
+	const turn = goal.clone().multiply(straight.invert());
+	const along = bone.getWorldPosition(new THREE.Vector3()).sub(lower.getWorldPosition(new THREE.Vector3())).normalize();
+	const onto = along.multiplyScalar(along.dot(new THREE.Vector3(turn.x, turn.y, turn.z)));
+	turnBone(lower, new THREE.Quaternion(onto.x, onto.y, onto.z, turn.w).normalize());
+	turnBone(bone, goal.multiply(bone.getWorldQuaternion(now).invert()));
+}
+
+/** Where `root`'s `hand` closes round a handle, in the hand bone's own space: just short of the middle knuckle, a little below the bones. */
+function fistOf(root:THREE.Object3D, hand:Hand):THREE.Vector3 | null {
+	const bone = humanBone(root, `${hand}Hand`);
+	const turn = bone && restTurn(root, bone.name);
+	const knuckle = humanBone(root, `${hand}MiddleProximal`)?.position;
+	if (!turn || !knuckle) {
+		return null;
+	}
+	const down = new THREE.Vector3(0, -1, 0).applyQuaternion(turn.clone().invert());
+	return knuckle.clone().multiplyScalar(0.65).addScaledVector(down, 0.1 * knuckle.length());
 }
 
 /** Turns a bone by `turn` (world space), keeping its parent where it is. */
@@ -119,10 +162,15 @@ export function lookAt(root:THREE.Object3D, target:THREE.Vector3, weight:number)
 /**
  * Bends `root`'s arm so the hand reaches `target` (world), `weight` of the way (0–1): two-bone IK
  * from the shoulder, the elbow bending toward `elbow` (a world direction; default: the side the clip
- * bent it). The arm keeps its length: a target out of reach gets the hand pointed at it.
+ * bent it). The arm keeps its length: a target out of reach gets the hand pointed at it. Partway, the elbow
+ * swings out round the body, never through it.
  */
 export function reach(root:THREE.Object3D, hand:Hand, target:THREE.Vector3, weight:number, elbow:THREE.Vector3 | null = null):void {
-	limb(root, `${hand}UpperArm`, `${hand}LowerArm`, `${hand}Hand`, target, weight, elbow);
+	const shoulder = humanBone(root, `${hand}UpperArm`);
+	const neck = humanBone(root, 'neck');
+	root.updateMatrixWorld(true);
+	const out = shoulder && neck ? shoulder.getWorldPosition(new THREE.Vector3()).sub(neck.getWorldPosition(new THREE.Vector3())).setY(0).normalize() : null;
+	limb(root, `${hand}UpperArm`, `${hand}LowerArm`, `${hand}Hand`, target, weight, elbow, out);
 }
 
 /**
@@ -178,28 +226,6 @@ export function orientHand(root:THREE.Object3D, hand:Hand, point:THREE.Vector3, 
 	bone.updateMatrixWorld(true);
 }
 
-/**
- * Turns `root`'s hand, `weight` of the way (0–1), so the `prop` it holds points its own `axis` along
- * `point` (world) with its own `side` as near `facing` as that allows (a sword: tip ahead, flat
- * level). The prop turns with the hand, about the wrist; the arm stays as it is.
- */
-export function aimHeld(root:THREE.Object3D, hand:Hand, prop:THREE.Object3D, axis:THREE.Vector3, side:THREE.Vector3, point:THREE.Vector3, facing:THREE.Vector3, weight:number):void {
-	const bone = humanBone(root, `${hand}Hand`);
-	if (!bone?.parent || weight <= 0) {
-		return;
-	}
-	root.updateMatrixWorld(true);
-	const basis = (along:THREE.Vector3, across:THREE.Vector3):THREE.Quaternion => {
-		const x = along.clone().normalize();
-		const y = across.clone().addScaledVector(x, -across.dot(x)).normalize();
-		return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, new THREE.Vector3().crossVectors(x, y)));
-	};
-	const held = prop.getWorldQuaternion(new THREE.Quaternion());
-	const now = basis(axis.clone().applyQuaternion(held), side.clone().applyQuaternion(held));
-	const turn = basis(point, facing).multiply(now.invert());
-	turnBone(bone, new THREE.Quaternion().slerp(turn, Math.min(1, weight)));
-}
-
 /** A full fist: how far each finger joint curls (radians), knuckle first. */
 const FIST = [1.35, 1.55, 1.0];
 const FINGERS = ['Index', 'Middle', 'Ring', 'Little'];
@@ -231,11 +257,14 @@ export function closeHand(root:THREE.Object3D, hand:Hand, amount:number):void {
 	}
 }
 
+/** How far an arm partway to its pose bends its elbow out from the body (at the halfway point, against a unit pole). */
+const SWING_OUT = 0.8;
+
 /**
  * Two-bone IK: turns `upper` and `lower` so the end joint reaches `target` (world), `weight` of
  * the way. The middle joint bends toward `pole` (a world direction), or the way the clip bent it.
  */
-function limb(root:THREE.Object3D, upperName:string, lowerName:string, endName:string, target:THREE.Vector3, weight:number, pole:THREE.Vector3 | null):void {
+function limb(root:THREE.Object3D, upperName:string, lowerName:string, endName:string, target:THREE.Vector3, weight:number, pole:THREE.Vector3 | null, out:THREE.Vector3 | null = null):void {
 	const upper = humanBone(root, upperName);
 	const lower = humanBone(root, lowerName);
 	const end = humanBone(root, endName);
@@ -252,9 +281,16 @@ function limb(root:THREE.Object3D, upperName:string, lowerName:string, endName:s
 	const toT = t.clone().sub(a);
 	const dir = toT.lengthSq() > 1e-10 ? toT.normalize() : c.clone().sub(a).normalize();
 	const d = THREE.MathUtils.clamp(t.distanceTo(a), Math.abs(l1 - l2) + 1e-3, (l1 + l2) * 0.999);
-	// Where the middle joint goes: on the circle the two lengths allow, toward the pole.
+	// Where the middle joint goes: on the circle the two lengths allow, toward the pole, as far as `weight` turns it from
+	// the way the clip bent it.
 	const cosA = THREE.MathUtils.clamp((l1 * l1 + d * d - l2 * l2) / (2 * l1 * d), -1, 1);
-	const bendTo = (pole ?? b.clone().sub(a)).clone();
+	const bent = b.clone().sub(a).normalize();
+	const w = Math.min(1, weight);
+	const bendTo = pole ? bent.lerp(pole.clone().normalize(), w) : bent;
+	// Halfway between the two, it bends out the most (`out`, away from the body).
+	if (out) {
+		bendTo.addScaledVector(out, SWING_OUT * 4 * w * (1 - w));
+	}
 	bendTo.addScaledVector(dir, -bendTo.dot(dir));
 	if (bendTo.lengthSq() < 1e-8) {
 		bendTo.set(0, -1, 0).addScaledVector(dir, -dir.y);

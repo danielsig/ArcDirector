@@ -46,8 +46,11 @@ export type ProvidedModel = Required<Pick<ModelSpec, 'id' | 'thinking' | 'maxPar
 	name:string;
 	vision:boolean;
 	contextLength?:number;
-	/** Tokens one of its requests may fill, when its context is known: its share with every slot busy ({@link ModelProvider.slotContext}). */
-	slotContext?:number;
+	/**
+	 * Tokens one of its requests may fill, when its context is known: its share with every slot busy
+	 * ({@link ModelProvider.slotContext}). Asked on each think, as a provider may learn it only once the model is loaded.
+	 */
+	slotContext:()=>number | undefined;
 	/** A decision model (Skaldic Laya, Jev): it only picks `choose` choices, so it is never the default. */
 	decision:boolean;
 	/** A decision model's System One endpoint on its server, when the server serves one. */
@@ -160,8 +163,8 @@ export class ModelProvider<TTransport extends InferenceProvider = InferenceProvi
 		return isVisionModel(info ?? id);
 	}
 
-	/** Tokens each of `maxParallel` requests at once may fill of a model loaded with `contextLength`: LM Studio's rule, {@link contextPerSlot}. */
-	protected slotContext(contextLength:number, maxParallel:number):number {
+	/** Tokens each of `maxParallel` requests at once to model `id` may fill, loaded with `contextLength`: LM Studio's rule, {@link contextPerSlot}. */
+	protected slotContext(id:string, contextLength:number, maxParallel:number):number {
 		return contextPerSlot(contextLength, maxParallel);
 	}
 
@@ -193,7 +196,7 @@ export class ModelProvider<TTransport extends InferenceProvider = InferenceProvi
 			prompt: trainedOnArcDirector(id) ? 'compact' : spec.prompt ?? 'full',
 			sampling: samplingOf(sampling, undefined),
 			contextLength: spec.contextLength,
-			slotContext: spec.contextLength === undefined ? undefined : this.slotContext(spec.contextLength, maxParallel),
+			slotContext: () => (spec.contextLength === undefined ? undefined : this.slotContext(id, spec.contextLength, maxParallel)),
 			decision,
 			embedding: spec.embedding === true,
 			systemOneURL,

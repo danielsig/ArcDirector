@@ -87,7 +87,7 @@ const DEFAULT = {
 	browserModel: '',
 	playerKind: '',
 	maxParallel: 4,
-	contextLength: 16384,
+	contextLength: 32768,
 	batchThinks: true,
 	thinkingBudget: 512 as number,
 	/** How freely NPCs pick each word: 0 always the likeliest, 2 wild. */

@@ -1,5 +1,5 @@
 import { Time, distanceXZ, type GameObject } from '@arc-director/kindling';
-import type { SpeechUtterance } from 'arc-director';
+import { SayTone, type SpeechUtterance } from 'arc-director';
 import { Alarm, MarketplaceNPC, Wanted, idOf } from '../../engine/components';
 import { USE_RANGE } from '../../items/pickup';
 import type { GameHost } from '../../director/adapter';
@@ -9,23 +9,28 @@ import { showSpeech } from '../../director/player-talk';
 /** How long a cry keeps guards running, in seconds of game time. */
 const ALARM_LIFE = 24;
 
-/**
- * A word that pulls the watch. Whole words only, so "helpful" is not "help".
- * The first match is the word the guard answers.
- */
-const SECURITY_WORD = /\b(thefts?|thieves|thief|stolen|stole|stealing|steals?|robberies|robbery|robbers?|robbing|robbed|muggings?|muggers?|mugged|helps?|helped|helping)\b/i;
+/** A theft word pulls the watch however it is said. Whole words only. */
+const THEFT_WORD = /\b(thefts?|thieves|thief|stolen|stole|stealing|steals?|robberies|robbery|robbers?|robbing|robbed|muggings?|muggers?|mugged)\b/i;
 
-export function securityWord(text:string):string | undefined {
-	return text.match(SECURITY_WORD)?.[1]?.toLowerCase();
+/** Tones that make "help" a call. Said plainly ("can you help me find the baker?"), it is no cry. */
+const CALLS:readonly SayTone[] = [SayTone.Shout, SayTone.Scream];
+
+/**
+ * The word the guard answers in a line, if it pulls the watch: a theft word, else "help" as a call, shouted, screamed
+ * or with a "!" ("Help!", "Help me, please!").
+ */
+export function securityWord({ text, as }:Pick<SpeechUtterance, 'text' | 'as'>):string | undefined {
+	const called = text.includes('!') || CALLS.some((tone) => tone === as);
+	return text.match(THEFT_WORD)?.[1]?.toLowerCase() ?? (called && /\bhelp\b/i.test(text) ? 'help' : undefined);
 }
 
 function answerLine(word:string):string {
-	return word.startsWith('help') ? 'Hold. What do you need?' : 'Hold. Who stole?';
+	return word === 'help' ? 'Hold. What do you need?' : 'Hold. Who stole?';
 }
 
 /** A cry from anyone but a guard. A thief is already chased; a guard does not answer their own word. */
 export function noteSecurityCry(host:GameHost, utterance:SpeechUtterance):void {
-	const word = securityWord(utterance.text);
+	const word = securityWord(utterance);
 	if (!word) {
 		return;
 	}

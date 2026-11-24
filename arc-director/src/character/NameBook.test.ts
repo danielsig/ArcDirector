@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { NameBook } from './NameBook.js';
+import { Knows, NameBook } from './NameBook.js';
 
 describe('NameBook.prune', () => {
 	it('drops names nothing uses, keeps learned names and an unsuffixed name while its suffixed sibling stays', () => {
@@ -100,5 +100,14 @@ describe('NameBook voices', () => {
 		book.hear('Ann');
 		book.hear('Bob');
 		assert.deepEqual([book.peek('Ann'), book.peek('voice:Ann'), book.peek('voice:Bob')], ['FigureA', 'VoiceA', 'VoiceB']);
+	});
+
+	it('knows the voices its persona\'s spec says from the start, tied to the look and name everyone knows', () => {
+		const book = new NameBook();
+		book.knowsBySpec = (id) => (id === 'Wynn' ? [Knows.Voice] : []);
+		book.name('Wynn', 'Wynn', { seen: true, character: true });
+		book.hear('Wynn');
+		book.hear('Ann');
+		assert.deepEqual([book.peek('voice:Wynn'), book.peek('voice:Ann')], ['Wynn', 'VoiceA']);
 	});
 });

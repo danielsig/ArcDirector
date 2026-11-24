@@ -327,7 +327,7 @@ export class GameHost {
 			return;
 		}
 		const named = character.getComponent(Named);
-		const role = mind.persona.identity.role;
+		const role = mind.voice.persona.identity.role;
 		if (named && role) {
 			named.aliases = [...new Set([...(named.aliases ?? []), role])];
 		}

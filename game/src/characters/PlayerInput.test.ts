@@ -65,14 +65,7 @@ test('a tap interacts first: it picks up what lies near, sword in hand or not', 
 	assert.match(arcs[0] ?? '', /^pick_up\(item=\w+\)$/);
 });
 
-test('with empty hands, a tap looks over the person it lands on', () => {
-	const { world, player } = scene();
-	const npc = person(world, 'Fern', 1);
-	frame(world, player, TOUCH_TAP);
-	assert.equal(world.hudMessage, examineWorld(npc));
-});
-
-test('with a sword in hand, a tap swings at them instead of looking them over', () => {
+test('with a sword in hand, a tap swings at the person it lands on', () => {
 	const { world, go, player } = scene();
 	equipItem(go, sword(), world);
 	person(world, 'Fern', 1);
@@ -82,12 +75,12 @@ test('with a sword in hand, a tap swings at them instead of looking them over', 
 	assert.ok(Math.abs(go.transform.yaw - yawToward(1, 0)) < 1e-9);
 });
 
-test('KeyE still looks them over with a sword in hand', () => {
+test('KeyE never works a person, sword in hand or not', () => {
 	const { world, go, player } = scene();
 	equipItem(go, sword(), world);
-	const npc = person(world, 'Fern', 1);
+	person(world, 'Fern', 1);
 	frame(world, player, 'KeyE');
-	assert.equal(world.hudMessage, examineWorld(npc));
+	assert.equal(world.hudMessage, '');
 });
 
 test('toggleItem takes an item in hand, selected, and puts it back', () => {

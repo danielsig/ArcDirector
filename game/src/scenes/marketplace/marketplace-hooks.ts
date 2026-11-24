@@ -1,12 +1,14 @@
-import { Time, distanceXZ, type GameObject } from '@arc-director/kindling';
-import { parseArc, pascalCase, STOCK_COLLECTIVE_VERBS, STOCK_FORMATION_VERBS, type ArcDirector, type Kit } from 'arc-director';
-import { MarketplaceNPC, MarketplaceGate, Merchant, Wanted, idOf } from '../../engine/components';
+import { Time, clamp, distanceXZ, lerpAngle, type GameObject } from '@arc-director/kindling';
+import { AT_POST } from '../../world/constants';
+import { parseArc, pascalCase, STOCK_COLLECTIVE_VERBS, STOCK_FORMATION_VERBS, type ArcDirector, type ArcResult, type Kit, type VerbCall } from 'arc-director';
+import { MarketplaceNPC, Merchant, Wanted, idOf } from '../../engine/components';
 import { CharacterMotor } from '../../characters/CharacterMotor';
+import { NPCInput } from '../../characters/NPCInput';
 import { compactName, findCarried, itemMatchesName, tryInsert } from '../../items/inventory';
 import { dropItem, USE_RANGE } from '../../items/pickup';
 import type { GameHost, CharacterCtx } from '../../director/adapter';
 import type { SceneHooks } from '../../director/game-types';
-import { customerCount, guardPost, spawnRandomCustomer, MARKETPLACE_CAST, SELLER_MEMORIES } from './marketplace-hive';
+import { BEHIND_GATE, customerCount, guardPost, intoSquare, spawnRandomCustomer, MARKETPLACE_CAST, SELLER_MEMORIES } from './marketplace-hive';
 import { squareList } from './wares';
 import { mindsOf } from '../scene';
 import { coinsOf } from '../../items/wallet';
@@ -19,9 +21,6 @@ import { Alarm } from '../../engine/components';
 
 /** What the marketplace keeps as it runs, saved with the game: when the next shopper may walk in. */
 type Marketplace = { nextCustomerAt:number };
-
-/** How close to the gate counts as having walked out. A plain go_to stops about a meter short, and a new arrival stands four meters inside. */
-const DOORWAY = 1.2;
 
 /** How long a shopper strolls before the next look around, unless the hive sends them somewhere. */
 const BROWSE = 16;
@@ -50,10 +49,19 @@ function afterPickUp(host:GameHost, character:GameObject, name:string):void {
 	}
 }
 
-function despawn(host:GameHost, go:GameObject):void {
+/** A shopper whose go_to its own gate ends in reach walks out through it (`exitGates`); a wanted thief is held there. */
+export function leaveByGate(call:VerbCall<CharacterCtx>, result:ArcResult):void {
+	const shopper = call.ctx.character;
+	const npc = shopper.getComponent(MarketplaceNPC);
+	if (call.verb === 'go_to' && result.status === 'ok' && npc?.kind === 'customer' && call.args.target === npc.leaveGate && !shopper.getComponent(Wanted)?.enabled) {
+		npc.leaving = true;
+	}
+}
+
+/** A shopper walking out leaves the minds, and the square hears it. */
+function walkOut(host:GameHost, go:GameObject):void {
 	const id = idOf(go);
 	host.arc?.removeCharacter(id);
-	host.world.remove(go);
 	host.arc?.pushEvent({
 		kind: 'Left',
 		text: `${id} left through the gate`,
@@ -105,7 +113,6 @@ function catchThief(host:GameHost, guard:GameObject, thief:GameObject):void {
 	const npc = thief.getComponent(MarketplaceNPC);
 	if (npc?.kind === 'customer') {
 		npc.wants = [];
-		npc.leaving = true;
 		const mind = host.arc?.character(who);
 		if (mind) {
 			mind.tags = mind.tags.filter((tag) => tag !== 'wanting');
@@ -130,17 +137,28 @@ function seizeNearby(host:GameHost):void {
 }
 
 /**
- * Any shopper on a gate's threshold is gone: on it, not merely near it, since a new arrival stands four meters inside.
- * A wanted thief is stopped there, beside the guard, until caught.
+ * A shopper walking out ({@link leaveByGate}) leaves the minds, and the scene walks it on through its gate to the street
+ * behind, where shoppers come in: it is gone the moment it is past the gate's middle, so nobody stands in the opening.
  */
 function exitGates(host:GameHost):void {
 	const gone:GameObject[] = [];
-	host.world.forEachComponent(MarketplaceGate, (exit, gate) => host.world.forEachComponent(MarketplaceNPC, (npc, go) => {
-		if (npc.kind === 'customer' && !go.getComponent(Wanted)?.enabled && distanceXZ(go, gate) <= DOORWAY) {
+	host.world.forEachComponent(MarketplaceNPC, (npc, go) => {
+		const gate = npc.leaving ? host.world.findNamed(npc.leaveGate) : undefined;
+		if (!gate) {
+			return;
+		}
+		if (host.arc?.character(idOf(go))) {
+			walkOut(host, go);
+		}
+		const p = gate.transform.position;
+		const into = intoSquare(host.world, gate);
+		const at = go.transform.position;
+		if ((at.x - p.x) * into.x + (at.z - p.z) * into.z <= 0) {
 			gone.push(go);
 		}
-	}));
-	gone.forEach((go) => despawn(host, go));
+		go.getComponent(NPCInput)!.destinationPoint = { x: p.x - into.x * BEHIND_GATE, z: p.z - into.z * BEHIND_GATE };
+	});
+	gone.forEach((go) => host.world.remove(go));
 }
 /** CharacterMotor's own walk, m/s. NPCs in this scene use {@link MARKETPLACE_WALK} instead. */
 const PLAYER_WALK = 3.4;
@@ -169,14 +187,36 @@ function browse(host:GameHost):void {
 		if (!character || character.arc) {
 			return;
 		}
-		const idle = Math.random() < 0.5;
+		const idle = npc.strolled && Math.random() < 0.5;
+		npc.strolled = true;
 		const seconds = idle ? IDLE_FOR[0] + Math.floor(Math.random() * (IDLE_FOR[1] - IDLE_FOR[0] + 1)) : BROWSE;
 		void character.enact(parseArc(idle ? `wait(seconds=${seconds})` : `wander(seconds=${seconds})`, character.verbs));
 	});
 }
 
+/**
+ * A seller with nothing to do walks back onto its post, then turns to face out across its counter once it faces no one
+ * it talks to: it serves from there, and never stays off it.
+ */
+function keepPosts(host:GameHost):void {
+	host.world.forEachComponent(MarketplaceNPC, (npc, go) => {
+		const input = go.getComponent(NPCInput);
+		if (npc.kind !== 'vendor' || !npc.post || !input || host.arc?.character(idOf(go))?.arc) {
+			return;
+		}
+		const p = go.transform.position;
+		if (Math.hypot(p.x - npc.postX, p.z - npc.postZ) > AT_POST) {
+			input.destinationPoint = { x: npc.postX, z: npc.postZ };
+		}
+		else if (!input.faceName) {
+			go.transform.yaw = lerpAngle(go.transform.yaw, npc.postYaw, clamp(Time.deltaTime * 4, 0, 1));
+		}
+	});
+}
+
 function tickMarketplaceNPC(host:GameHost):void {
 	paceMarketplace(host);
+	keepPosts(host);
 	exitGates(host);
 	browse(host);
 	seizeNearby(host);
@@ -204,7 +244,7 @@ function tickMarketplaceNPC(host:GameHost):void {
 	if (!host.arc) {
 		return;
 	}
-	host.arc.collective('MarketplaceHive')?.addCharacter({ id: spawned.id, tags: spawned.tags, kit: HIVE_KIT });
+	host.arc.collective('MarketplaceHive')?.addCharacter({ ...spawned, kit: HIVE_KIT });
 }
 
 /** The marketplace's laws are the scene's: its minds step in with orders, and nobody writes laws. */
@@ -235,8 +275,10 @@ export function directMarketplace(host:GameHost, director:ArcDirector<CharacterC
 		.withMind({ systemNote: LEDGER_NOTE })
 		// What each of them lived stirs as they see each other, and colors what comes back to them.
 		.withFeelings()
-		// A shopper the player talks to, pays or offers to answers with a mind of its own, still one of the hive.
-		.withOwnMind({ on: { say: 'to', offer: 'to', give: 'to' }, when: ({ by, character }) => by.id === 'Player' && character.collective?.id === 'MarketplaceHive' })
+		// Whom the player talks to (the one named, else the one in front), pays or offers to answers with a mind of its own,
+		// still one of its collective.
+		.withOwnMind({ on: { say: 'to', offer: 'to', give: 'to' }, when: ({ by }) => by.id === 'Player' })
+		.onStep(leaveByGate)
 		// What each shopper walked in with. Read again every tick, so a purchase shows, and only while they are in the square.
 		.addRegions({ purses: {
 			from: [-Infinity, -Infinity],

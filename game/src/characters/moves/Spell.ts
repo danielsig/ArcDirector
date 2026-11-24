@@ -1,27 +1,24 @@
 import { isLiving } from '../../director/names';
 import { fireball, FIREBALL_SPEED, healLight, lightning, RELEASE_GRACE, type Cast, type Outcome } from '../../render/spell-fx';
-import { THREE, MeshRenderer, aimHeld, ease, humanBone, palmOf, reach, type GameObject, type SfxHandle, HeldProps, cueAt, cueAtPoint, type SfxName, UP, aheadOf, heightOf, pointOn, stanceOf, PoseMove } from './pose-body';
+import { THREE, MeshRenderer, ease, holdAt, palmOf, type GameObject, type HeldPose, type SfxHandle, HeldProps, cueAt, cueAtPoint, type SfxName, aheadOf, heldPose, inWorld, pointOn, stanceOf, PoseMove } from './pose-body';
 
 type SpellSounds = { gather:SfxName; loose?:SfxName; hit:SfxName; miss:SfxName };
 /**
  * Spells by verb: the effect each plays from the staff's head (or the casting hand), how fast it
  * flies to the target once loosed (m/s; none strikes at once), and how the right hand holds the staff
- * while the spell gathers: ahead of the shoulder (`out`) and above it (`up`, fractions of height),
- * the head pointing at the target and `rise` up (1 is 45°), or held high and upright for a heal.
+ * while the spell gathers (in a frame facing the target): its head pointing at the target, or held high and upright
+ * for a heal.
  * Its sounds: gathering, as it is loosed (at the caster), and where it lands on a hit or a miss.
  */
-const SPELLS:Record<string, { fx:(scene:THREE.Object3D, cast:Cast)=>void; speed?:number; out:number; up:number; rise:number; sound:SpellSounds }> = {
-	hex: { fx: fireball, speed: FIREBALL_SPEED, out: 0.3, up: 0.05, rise: 0.4, sound: { gather: 'fireCast', loose: 'fireThrow', hit: 'fireHit', miss: 'fireHit' } },
-	smite: { fx: lightning, out: 0.32, up: 0, rise: 0.2, sound: { gather: 'sparkCast', hit: 'thunder', miss: 'thunder' } },
-	heal: { fx: healLight, out: 0.2, up: 0.2, rise: 3, sound: { gather: 'healCast', hit: 'healLand', miss: 'fizzle' } },
+const SPELLS:Record<string, { fx:(scene:THREE.Object3D, cast:Cast)=>void; speed?:number; hold:HeldPose; sound:SpellSounds }> = {
+	hex: { fx: fireball, speed: FIREBALL_SPEED, hold: heldPose([0.149, 0.804, -0.158], [-68.2, 90, 0], [0.146, 0.653, -0.197]), sound: { gather: 'fireCast', loose: 'fireThrow', hit: 'fireHit', miss: 'fireHit' } },
+	smite: { fx: lightning, hold: heldPose([0.243, 0.742, -0.141], [101.3, 15, 180], [0.082, 0.707, -0.138]), sound: { gather: 'sparkCast', hit: 'thunder', miss: 'thunder' } },
+	heal: { fx: healLight, hold: heldPose([0.188, 0.864, -0.165], [161.6, -45, -180], [0.081, 0.881, -0.053]), sound: { gather: 'healCast', hit: 'healLand', miss: 'fizzle' } },
 };
 /** Seconds the casting arm takes to come up (at most half the cast), holds on after the spell lands, and takes to go back down. */
 const CAST_RAISE = 0.35;
 const CAST_HOLD = 0.15;
 const CAST_LOWER = 0.4;
-/** A held staff's own axes: its head up its +Y, its side along ±X. */
-const STAFF_HEAD = new THREE.Vector3(0, 1, 0);
-const STAFF_SIDE = new THREE.Vector3(1, 0, 0);
 
 /** A spell under way; `gathering` is its gathering sound, playing until it is settled. */
 type Casting = { spell:(typeof SPELLS)[string]; t0:number; windUp:number; target:GameObject; outcome?:Outcome; gathering?:SfxHandle | null };
@@ -109,25 +106,15 @@ export class Spell extends PoseMove<Casting> {
 			this.current = null;
 			return;
 		}
-		const shoulder = humanBone(root, 'rightUpperArm');
-		if (!shoulder) {
-			return;
-		}
-		const height = heightOf(this.go);
 		const weight = Math.min(
 			ease.inOutSine(Math.min(1, t / Math.min(CAST_RAISE, cast.windUp / 2))),
 			1 - ease.inOutSine(THREE.MathUtils.clamp((t - end) / CAST_LOWER, 0, 1)),
 		);
 		const toward = pointOn(cast.target, 0).sub(pointOn(this.go, 0)).setY(0);
 		const ahead = toward.lengthSq() > 0.01 ? toward.normalize() : aheadOf(this.go, 1);
-		const right = new THREE.Vector3().crossVectors(ahead, UP);
-		const { spell } = cast;
-		root.updateMatrixWorld(true);
-		const hand = shoulder.getWorldPosition(new THREE.Vector3()).addScaledVector(ahead, spell.out * height).addScaledVector(UP, spell.up * height);
-		reach(root, 'right', hand, weight, UP.clone().negate().addScaledVector(right, 0.6));
 		const staff = this.go.getComponent(HeldProps)?.prop('right');
 		if (staff) {
-			aimHeld(root, 'right', staff, STAFF_HEAD, STAFF_SIDE, ahead.clone().addScaledVector(UP, spell.rise).normalize(), right, weight);
+			holdAt(root, 'right', staff, inWorld(this.go, 'right', cast.spell.hold, ahead), weight);
 		}
 		this._castFrom.copy(this.castFrom());
 	}
@@ -135,7 +122,7 @@ export class Spell extends PoseMove<Casting> {
 	/** Where a spell leaves from: the head of the staff in the right hand, or the hand itself. */
 	private castFrom():THREE.Vector3 {
 		const root = this.go.getComponent(MeshRenderer)?.mesh;
-		return this.go.getComponent(HeldProps)?.tip('right')
+		return this.go.getComponent(HeldProps)?.along('right', 1)
 			?? (root && palmOf(root, 'right'))
 			?? pointOn(this.go, 0.6);
 	}

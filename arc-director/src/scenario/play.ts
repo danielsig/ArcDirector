@@ -2,7 +2,7 @@ import { STOCK_TRADE_VERBS, STOCK_VERBS } from '../arc/stock-verbs.js';
 import { STOCK_COLLECTIVE_VERBS, STOCK_FORMATION_VERBS } from '../collective/collective-verbs.js';
 import type { ArcResult, StepArg } from '../arc/arc-types.js';
 import { ArcDirector } from '../index.js';
-import type { CollectiveSpec, VerbCall } from '../director/director-types.js';
+import type { CharacterSpec, CollectiveSpec, VerbCall } from '../director/director-types.js';
 import type { Verbs } from '../director/Verbs.js';
 import type { MemoryDraft } from '../memory/store.js';
 import type { KnowledgeEntry } from '../mind/knowledge.js';
@@ -144,9 +144,10 @@ function stage(director:ArcDirector<SceneCtx>, s:Scenario, world:SceneWorld):Arc
 		return !character?.busy || character.verb === 'wait';
 	};
 	const verbs = [...STOCK_VERBS, ...STOCK_TRADE_VERBS, ...Object.keys(s.verbs ?? {})];
+	// Its own, even as a commander, whose squad speaks as it.
+	const identity = s.role || s.me.as ? { role: s.role ?? s.me.as } : undefined;
 	const persona = {
 		mind: { skipStart: true, rethinkingThreshold: 0, skipMajor: true, skipStrategic: true },
-		identity: s.role || s.me.as ? { role: s.role ?? s.me.as } : undefined,
 		goals: [{ text: s.goal }],
 		memories: Object.values(s.squad ?? {}).some((spot) => spot.as) ? [...s.memories ?? [], { text: SQUAD_IDLE, pinned: true }] : s.memories,
 	};
@@ -174,8 +175,8 @@ function stage(director:ArcDirector<SceneCtx>, s:Scenario, world:SceneWorld):Arc
 		.withContext((id) => (world.find(id) === id ? { id } : undefined))
 		.withDefaultKit({ verbs })
 		.if(!s.squad,
-			d => d.addCharacter({ id: s.me.id, ...persona, talk: s.talk, kit: { verbs: [...verbs, ...abilitiesOf(s.me)] } }),
-			d => d.withVerbs((v) => v.addStockCollective()).addCollective({ ...squadSpec(s, world, verbs), ...persona })
+			d => d.addCharacter({ id: s.me.id, ...persona, identity, talk: s.talk, kit: { verbs: [...verbs, ...abilitiesOf(s.me)] } }),
+			d => d.withVerbs((v) => v.addStockCollective()).addCollective({ ...squadSpec(s, world, verbs, identity), ...persona })
 		);
 }
 
@@ -219,7 +220,7 @@ function runSceneVerb(world:SceneWorld, name:string, run:Extract<SceneVerb, { ru
 }
 
 /** `s`'s squad as a collective: `me` its commander and voice, running the orders its mind gives. */
-function squadSpec(s:Scenario, world:SceneWorld, verbs:string[]):CollectiveSpec<SceneCtx> {
+function squadSpec(s:Scenario, world:SceneWorld, verbs:string[], identity:CharacterSpec['identity']):CollectiveSpec<SceneCtx> {
 	const squad = s.squad ?? {};
 	// The scenario's verbs its squad runs too.
 	const unitVerbs = Object.entries(s.verbs ?? {}).filter(([, verb]) => verb.units).map(([name]) => name);
@@ -247,7 +248,7 @@ function squadSpec(s:Scenario, world:SceneWorld, verbs:string[]):CollectiveSpec<
 	return {
 		id: squadOf(s),
 		kit: command,
-		characters: [{ ...unit(s.me.id, s.me), kit: command }, ...Object.entries(squad).map(([id, spot]) => unit(id, spot))],
+		characters: [{ ...unit(s.me.id, s.me), kit: command, identity }, ...Object.entries(squad).map(([id, spot]) => unit(id, spot))],
 		commander: s.me.id,
 	};
 }

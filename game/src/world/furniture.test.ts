@@ -16,21 +16,23 @@ import { getDef } from '../items/defs';
 import { equipItem } from '../items/equip';
 import { instantiateDef } from '../items/instance';
 import { findCarried, tryInsert } from '../items/inventory';
-import { USE_RANGE } from '../items/pickup';
+import { pickup, USE_RANGE } from '../items/pickup';
 import { Reading } from '../characters/Reading';
 import { isFood, readPage, useItem } from '../items/use';
 import type { GameHost } from '../director/adapter';
 import { FISH_VERB } from '../director/game-verbs';
 import { onStruck } from '../director/fight-verbs';
+import { transferRefusal } from '../director/items';
 import { examineWorld, tagsOf } from '../director/perception';
 import { decodeGlyphChunk, type ChunkFile } from './decode-glyph-chunk';
 import { syncDressingColliders } from '../kit/props/dressing-colliders';
 import { planProps } from '../kit/props/dressing-plan';
 import { roadLines } from '../kit/houses/roads';
-import { cellWays } from './path';
+import { canStand, cellWays } from './path';
 import { spawnChunkEntities } from './spawn';
 import { Door, interactDoor, openDoorAhead } from '../kit/door/door';
 import { Furniture, syncFurniture } from '../kit/furniture/furniture';
+import { Campfire } from '../kit/campfire/campfire';
 import { chestHolding, takeFromChest } from '../kit/chests/chest';
 
 function built(files:readonly ChunkFile[]):DemoWorld {
@@ -70,9 +72,10 @@ function seatNames(world:DemoWorld):string[] {
 
 test('every chair and bed in the glen can be named, by the map or by its house', () => {
 	const world = glen();
-	assert.deepEqual(seatNames(world), ['CottageBed', 'CottageChair', 'HutBed', 'HutChair', 'RiverChair']);
+	assert.deepEqual(seatNames(world), ['Bedroll', 'CottageBed', 'CottageChair', 'HutBed', 'HutChair', 'RiverChair']);
 	syncFurniture(world);
-	assert.equal(seatNames(world).length, 5, 'syncing again adds none');
+	assert.equal(seatNames(world).length, 6, 'syncing again adds none');
+	assert.equal(world.findByID('Bedroll')?.getComponent(Furniture)?.kind, 'bed');
 	assert.equal(world.findByID('HutBed')?.getComponent(Furniture)?.kind, 'bed');
 });
 
@@ -101,6 +104,22 @@ test('a route home goes through a door no lock holds, and the one heading in ope
 	assert.equal(door.getComponent(Door)?.open, false, 'not when heading away along the wall');
 	openDoorAhead(angler, { x: 23.5, z: 27.5 });
 	assert.equal(door.getComponent(Door)?.open, true);
+	angler.transform.position.z = 27.4;
+	openDoorAhead(angler, { x: 23.5, z: 27.5 });
+	assert.equal(door.getComponent(Door)?.open, false, 'and shuts it behind itself once through');
+});
+
+test('whoever carries the key of a locked door walks to a chair behind it, opening it on the way', () => {
+	const world = glen();
+	const doorGo = world.findNamed('CottageDoor')!;
+	const stranger = body(world, 'Stranger', 24.5, 9.5);
+	assert.equal(tryInsert(stranger, instantiateDef(getDef('brass_key'))), true);
+	const route = findRoute(cellWays(world), stranger, [24.5, 9.5], pointGoal([25.5, 6.5]));
+	assert.ok(route && 'points' in route, `no way in with the key: ${JSON.stringify(route)}`);
+	stranger.transform.position.z = 8.4;
+	openDoorAhead(stranger, { x: 24.5, z: 6.5 });
+	assert.equal(doorGo.getComponent(Door)?.open, true);
+	assert.equal(doorGo.getComponent(Lock)?.locked, true, 'opening leaves the lock as it is');
 });
 
 test('a locked door still says what it takes', () => {
@@ -217,12 +236,13 @@ for (const [house, door, chair, bed, from] of [['Cottage', 'CottageDoor', 'Cotta
 	});
 }
 
-test('a door locked from both sides still takes its key, and comes unlocked by it', () => {
+test('a door locked from both sides opens for whoever carries its key, and comes unlocked when the key is used', () => {
 	const world = built(DUNGEON_CHUNKS);
 	const doorGo = world.findNamed('CryptGate')!;
 	const go = body(world, 'Knight', doorGo.transform.position.x, doorGo.transform.position.z + 1);
+	assert.equal(doorGo.getComponent(Door)?.opensFrom(go, go.transform.position), false, 'not without its key');
 	assert.equal(tryInsert(go, instantiateDef(getDef('iron_key'))), true);
-	assert.equal(doorGo.getComponent(Door)?.opensFrom(go.transform.position), false, 'a key is used, not walked through');
+	assert.equal(doorGo.getComponent(Door)?.opensFrom(go, go.transform.position), true, 'its key, carried, opens it');
 	assert.equal(useItem(go, findCarried(go, (it) => !!it.Key)!, doorGo).reason, 'unlocked');
 	assert.equal(doorGo.getComponent(Lock)?.locked, false);
 });
@@ -328,6 +348,18 @@ test('a bed open on both sides takes whichever edge is nearer', () => {
 	const south = body(world, 'South', 18.5, 15.5).getComponent(Seated)!;
 	south.settle(bed);
 	assert.equal(south.side, 1);
+});
+
+test('the lean-to is solid, and its Bedroll is got into from the open front, between it and Campfire', () => {
+	const world = glen();
+	const bed = world.findByID('Bedroll')!;
+	const fire = world.findNamed('Campfire')!.transform.position;
+	const b = bed.transform.position;
+	const go = body(world, 'Forager', fire.x + 1.5, fire.z);
+	const spot = approachSpot(bed, go)!;
+	assert.ok(spot, 'it can be reached');
+	assert.ok(spot.z > b.z && spot.z < fire.z, `in front of it, short of the fire: ${spot.x.toFixed(2)}, ${spot.z.toFixed(2)}`);
+	assert.equal(canStand(world, go, b.x, b.z - 0.5), false, 'no standing under the low back of the lean-to');
 });
 
 test('coming from the door, a body stands beside the near side of CottageBed, by the trunk, and sits on that edge', () => {
@@ -468,18 +500,64 @@ test('eating fills, takes one off the stack, and each food does its own thing', 
 		return showNamingText(result.reason);
 	};
 	assert.equal(go.getComponent(Belly), undefined, 'hungry only from a meal on, or from the spawn');
-	assert.match(feed('silver_trout'), /full/);
+	assert.match(feed('cooked_trout'), /full/);
 	const belly = go.getComponent(Belly)!;
 	assert.equal(belly.hungry, false);
 	assert.equal(belly.haste, 0);
 	assert.equal(belly.luck, 0);
 	feed('fire_mushroom');
 	assert.equal(belly.haste, 0.25, 'a quarter faster');
-	assert.deepEqual(belly.ate, ['silver_trout', 'fire_mushroom'], 'it knows what it has eaten');
+	assert.deepEqual(belly.ate, ['cooked_trout', 'fire_mushroom'], 'it knows what it has eaten');
 	feed('moon_mushroom');
 	assert.ok(belly.luck > 0, 'luckier');
 	const twentyMinutes = 20 * 60;
 	assert.ok(belly.fullUntil > Time.time + twentyMinutes - 1 && belly.fullUntil <= Time.time + twentyMinutes);
+});
+
+test('a raw trout will not be eaten: on the campfire spit it cooks in 10 seconds and burns in two minutes', () => {
+	const world = glen();
+	const go = body(world, 'Forager', 5.5, 11.2);
+	assert.equal(tryInsert(go, instantiateDef(getDef('silver_trout'))), true);
+	const raw = findCarried(go, (it) => it.defID === 'silver_trout')!;
+	assert.match(showNamingText(useItem(go, raw, null).reason), /raw/);
+	const fire = world.findNamed('Campfire')!;
+	const campfire = fire.getComponent(Campfire)!;
+	// Into the fire as into a chest: food only, one at a time.
+	const intoFire = (thing:string):string | undefined => {
+		const refusal = transferRefusal({ verb: 'drop', thing, from: go, to: fire });
+		return refusal === undefined ? undefined : showNamingText(refusal);
+	};
+	assert.equal(tryInsert(go, instantiateDef(getDef('brass_key'))), true);
+	assert.match(intoFire('BrassKey') ?? '', /only food/);
+	assert.equal(intoFire('SilverTrout'), undefined);
+	assert.equal(useItem(go, raw, fire).ok, true);
+	campfire.update();
+	assert.equal(findCarried(go, (it) => it.defID === 'silver_trout'), null, 'off the hand, onto the spit');
+	const onSpit = ():string | undefined => campfire.onSpit?.defID;
+	assert.equal(onSpit(), 'silver_trout');
+	assert.equal(useItem(go, instantiateDef(getDef('silver_trout')), fire).ok, false, 'one at a time');
+	resetTime(Time.time + 9);
+	campfire.update();
+	assert.equal(onSpit(), 'silver_trout');
+	resetTime(Time.time + 1);
+	campfire.update();
+	assert.equal(onSpit(), 'cooked_trout');
+	resetTime(Time.time + 109);
+	campfire.update();
+	assert.equal(onSpit(), 'cooked_trout', 'not burnt short of two minutes');
+	resetTime(Time.time + 1);
+	campfire.update();
+	assert.equal(onSpit(), 'burnt_trout', 'two minutes on the fire');
+	assert.equal(isFood(instantiateDef(getDef('burnt_trout'))), false);
+	// Taken off the spit as out of a chest: what is on it, and only that.
+	const offFire = (thing:string):string | undefined => {
+		const refusal = transferRefusal({ verb: 'pick_up', thing, from: fire, to: go });
+		return refusal === undefined ? undefined : showNamingText(refusal);
+	};
+	assert.equal(offFire('BurntTrout'), undefined);
+	assert.match(offFire('CookedTrout') ?? '', /has no/);
+	assert.match(showNamingText(takeFromChest(go, chestHolding(fire, 'BurntTrout')!)), /^took BurntTrout/);
+	assert.equal(campfire.onSpit, undefined, 'taken off, the spit is free');
 });
 
 test('a hungry spawn is hungry until it eats', () => {

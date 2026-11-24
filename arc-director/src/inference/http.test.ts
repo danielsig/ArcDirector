@@ -1427,6 +1427,45 @@ describe('response format', () => {
 	});
 });
 
+describe('HttpProvider room to answer', () => {
+	/** A provider whose model `m` is loaded with 4096 tokens over 4 slots, 1024 each, and the paths it sent chats to. */
+	function quarterSlots(settings:ModelSettings = {}):{ provider:HttpProvider; sent:string[] } {
+		const sent:string[] = [];
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify({ models: [{ key: 'm', loaded_instances: [{ id: 'm', config: { context_length: 4096, parallel: 4 } }] }] }), { status: 200 });
+				}
+				sent.push(url.slice(url.lastIndexOf('/') + 1));
+				return new Response(JSON.stringify(url.endsWith('/responses')
+					? { id: 'resp_1', output: [{ type: 'message', content: [{ type: 'output_text', text: 'wait()' }] }] }
+					: { choices: [{ message: { content: 'wait()' } }] }), { status: 200 });
+			},
+		});
+		provider.configureModel('m', settings);
+		return { provider, sent };
+	}
+
+	/** A request whose prompt runs about `tokens`. */
+	const asking = (tokens:number, extra:Partial<ChatRequest> = {}):ChatRequest => ({ model: 'm', messages: [{ role: 'user', content: 'x'.repeat(4 * tokens) }], ...extra });
+
+	it("sends a prompt past its slot's share that the whole context holds, and refuses one it does not", async () => {
+		const { provider, sent } = quarterSlots();
+		await assert.rejects(provider.chat(asking(3700)), /prompt too long: ≈37\d\d of the 4096 tokens m is loaded with, leaving under 512 to answer in: raise contextLength$/);
+		assert.deepEqual(sent, []);
+		assert.equal((await provider.chat(asking(600))).content, 'wait()', 'a lone request may fill more than its share');
+		assert.deepEqual(sent, ['responses'], 'the responses API is still asked: the refusal was not its');
+	});
+
+	it('answers without thinking when there is no room to think, and needs no more than a reply that asks for less', async () => {
+		const { provider } = quarterSlots({ enableThinking: true, thinkingBudget: 256 });
+		assert.equal((await provider.chat(asking(3400))).content, 'wait()', 'room to answer, not to think first');
+		assert.equal((await provider.chat(asking(4000, { enableThinking: false, maxTokens: 1 }))).content, 'wait()', 'a reply a token long, as a System One pick, needs one');
+	});
+});
+
 describe('System One', () => {
 	it('asks Jev one choice question and reads its answer', async () => {
 		let sent:{ url:string; body:unknown } | undefined;

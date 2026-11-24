@@ -6,7 +6,7 @@ import { Barrier, BoxCollider, Lock, lockedNote, lockedReason, setOpen } from '.
 import { DemoMeshRenderer } from '../../engine/demo-mesh-renderer';
 import { Order } from '../../engine/order';
 import { findCarried } from '../../items/inventory';
-import { itemID, type ItemInstance } from '../../items/instance';
+import type { ItemInstance } from '../../items/instance';
 import type { UseResult } from '../../items/use';
 import { PALETTE, plankMat, toon } from '../../render/toon';
 import { doorInteriorAlong, nearestDoorway } from '../houses/interior';
@@ -34,6 +34,8 @@ const SFX = {
 
 /** How near a walker comes to a shut door before it reaches out and opens it. */
 const DOOR_REACH = 1.2;
+/** How far past a door a walker stands before shutting it behind itself, clear of the leaf. */
+const LEAF_CLEAR = 0.6;
 
 export class Door extends Barrier {
 	public static override order = Order.door;
@@ -45,6 +47,8 @@ export class Door extends Barrier {
 	public flipped = false;
 	/** Named building this door opens into, if any. */
 	public buildingID = '';
+	/** Who walked up and opened it, and from which side ({@link sideOf}), to shut it behind them once through unless still locked. */
+	private _openedBy:{ body:GameObject; side:number } | null = null;
 
 	/**
 	 * Opens or shuts it, with its creak. `unlock` turns its key first ({@link Lock.turnKey}). Every hand, key, walker and
@@ -52,8 +56,35 @@ export class Door extends Barrier {
 	 */
 	public setOpen(open:boolean, unlock = false):void {
 		if (setOpen(this, open, unlock, SFX)) {
+			this._openedBy = null;
 			this.syncCollision();
 		}
+	}
+
+	/**
+	 * Called as `body` walks toward `to` near this door. If the door is shut and in the way, `body` opens it (and unlocks
+	 * it, if it carries the key). Once `body` is through, it shuts the door behind itself, unless the door is still locked:
+	 * then it is left open, so whoever follows can get through.
+	 */
+	public walkThrough(body:GameObject, to:XZ):void {
+		const p = body.transform.position;
+		const side = this.sideOf(p);
+		if (!this.open) {
+			const d = this.gameObject.transform.position;
+			if ((to.x - p.x) * (d.x - p.x) + (to.z - p.z) * (d.z - p.z) > 0 && this.opensFrom(body, p)) {
+				this.setOpen(true, true);
+				this._openedBy = { body, side };
+			}
+		}
+		else if (this._openedBy?.body === body && side * this._openedBy.side < 0 && Math.abs(side) > LEAF_CLEAR && !this.gameObject.getComponent(Lock)?.locked) {
+			this.setOpen(false);
+		}
+	}
+
+	/** How far `at` stands out from it along its passage: positive one way, negative the other. */
+	private sideOf(at:XZ):number {
+		const p = this.gameObject.transform.position;
+		return this.axis === 'x' ? at.x - p.x : at.z - p.z;
 	}
 
 	/** Its key opens it ({@link Lock.useKey}). */
@@ -114,23 +145,23 @@ export class Door extends Barrier {
 		return !this.open;
 	}
 
-	/** Whether someone at `from` can open it: no lock holds it, or its lock bars only the other side. Opening leaves the lock as it is. */
-	public override opensFrom(from:XZ):boolean {
+	/**
+	 * Whether `body` at `from` can open it: no lock holds it, `body` carries its key, or its lock bars only the other
+	 * side.
+	 */
+	public override opensFrom(body:GameObject, from:XZ):boolean {
 		const lock = this.gameObject.getComponent(Lock);
-		if (!lock?.locked) {
+		if (!lock?.locked || findCarried(body, (it) => lock.fits(it))) {
 			return true;
 		}
-		const p = this.gameObject.transform.position;
 		const inward = doorInteriorAlong(this.gameObject);
-		return lock.lockedFrom === 'outside' && inward !== 0 && (this.axis === 'x' ? from.x - p.x : from.z - p.z) * inward >= 0;
+		return lock.lockedFrom === 'outside' && inward !== 0 && this.sideOf(from) * inward >= 0;
 	}
 
-	/** Locked: whether `body` carries the key. */
+	/** Locked, and `body` lacks the key. */
 	protected blockedText(body:GameObject, name:(id:string)=>string):string {
 		const lock = this.gameObject.getComponent(Lock)!;
-		const key = findCarried(body, (it) => lock.fits(it));
-		const door = name(this.label);
-		return key ? `${door} is locked — you carry ${name(itemID(key))}, use it on ${door}` : `${door} is ${showNamingText(lockedReason(this.gameObject.world, lock, body), name)}`;
+		return `${name(this.label)} is ${showNamingText(lockedReason(this.gameObject.world, lock, body), name)}`;
 	}
 
 	/** A landmark to open and shut, as minds see it. */
@@ -148,19 +179,11 @@ export class Door extends Barrier {
 	}
 }
 
-/** A walker heading for `to` through a shut door no lock holds, and within arm's reach of it, opens it. */
+/** A walker heading for `to` within arm's reach of a door walks through it ({@link Door.walkThrough}). */
 export function openDoorAhead(character:GameObject, to:XZ):void {
 	const p = character.transform.position;
 	const doorGo = character.world && nearestDoorway(character.world, p.x, p.z, DOOR_REACH);
-	const door = doorGo?.getComponent(Door);
-	if (!doorGo || !door || door.open || !door.opensFrom(p)) {
-		return;
-	}
-	const d = doorGo.transform.position;
-	const ahead = (to.x - p.x) * (d.x - p.x) + (to.z - p.z) * (d.z - p.z);
-	if (ahead > 0) {
-		interactDoor(character, doorGo);
-	}
+	doorGo?.getComponent(Door)?.walkThrough(character, to);
 }
 
 export function interactDoor(character:GameObject, doorGo:GameObject):string {
@@ -170,7 +193,7 @@ export function interactDoor(character:GameObject, doorGo:GameObject):string {
 		return 'not a door';
 	}
 	// Anyone can close a door; a lock only has a say in opening it.
-	if (!door.open && lock && !door.opensFrom(character.transform.position)) {
+	if (!door.open && lock && !door.opensFrom(character, character.transform.position)) {
 		const refused = lock.refusal(character);
 		if (refused) {
 			return refused;
@@ -226,6 +249,8 @@ function createDoorMesh(flipped = false):THREE.Group {
 /** How far a gate's leaves swing: each on its own pier, flat against the wall outside when open. */
 const GATE_LEAF_W = 0.44;
 const GATE_H = 2.1;
+/** A gate pier's face, from the passage's middle: a little proud of the wall's end, never in its plane. */
+const PIER_FACE = 0.5 - 0.03;
 
 /** One barred iron leaf of a gate, hung on a hinge at its own `z` edge: frame, bars, and spear tips along the top. */
 function gateLeaf(hingeZ:number, sign:number):THREE.Group {
@@ -258,7 +283,7 @@ function createGateMesh():THREE.Group {
 	const g = new THREE.Group();
 	const stone = toon(PALETTE.wall, { pattern: 'stone', patternScale: 0.18, patternInk: 0.5 });
 	const iron = toon(PALETTE.iron, { rim: 0.35 });
-	const pierZ = 0.5 + 0.17;
+	const pierZ = PIER_FACE + 0.17;
 	const piers:PosedPart[] = [-1, 1].flatMap((s) => [
 		{ geo: new THREE.BoxGeometry(0.44, 2.5, 0.34), y: 1.25, z: s * pierZ },
 		{ geo: bevelBox(0.56, 0.14, 0.46, 0.03), y: 2.57, z: s * pierZ },
@@ -277,10 +302,11 @@ function createGateMesh():THREE.Group {
 	]), iron);
 	ironwork.castShadow = true;
 	g.add(ironwork);
-	const left = gateLeaf(-0.5, 1);
+	// Hung half a stile in front of each pier, so an open leaf lies on its face, not in it.
+	const left = gateLeaf(-(PIER_FACE - 0.02), 1);
 	left.name = 'hinge';
 	g.add(left);
-	const right = gateLeaf(0.5, -1);
+	const right = gateLeaf(PIER_FACE - 0.02, -1);
 	right.name = 'hinge2';
 	g.add(right);
 	return g;
@@ -295,7 +321,8 @@ export const door:Thing = {
 		const panel = new GameObject();
 		panel.addComponent(BoxCollider);
 		const door = go.addComponent(Door, { axis, open: !!ent.open, panel, flipped: ent.def.includes('flipped') });
-		go.transform.yaw = axis === 'x' ? 0 : Math.PI / 2;
+		// Its open leaf lies to its left: a legend's `yaw` turns it around, to open the other way.
+		go.transform.yaw = ent.yaw ?? (axis === 'x' ? 0 : Math.PI / 2);
 		panel.parent = go;
 		go.addComponent(Lock, { keyID: ent.keyID ?? 'brass', locked: ent.locked ?? true, lockedFrom: ent.lockedFrom ?? 'both' });
 		go.addComponent(DemoMeshRenderer, { meshID: ent.def });

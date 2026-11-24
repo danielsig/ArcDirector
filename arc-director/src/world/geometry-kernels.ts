@@ -51,7 +51,7 @@ export function geometryKernels(
 				const target = world.find(b.id);
 				const near = target === undefined ? 1 : reachTo(world, character, target);
 				const route = findRoute(routes, character, p[0].point, pointGoal(p[1].point, near));
-				return route && 'points' in route ? routeLength(p[0].point, route.points) : undefined;
+				return 'points' in route ? routeLength(p[0].point, route.points) : undefined;
 			}
 			: undefined,
 	};
@@ -73,10 +73,7 @@ export function wayBlocked(world:HostWorld<unknown>, characterID:string, targetI
 			return undefined;
 		}
 		const route = findRoute(routes, character, from, pointGoal(to, reachTo(world, character, target)));
-		if (!route) {
-			return '';
-		}
-		return 'blockers' in route ? blockedReason(route) : undefined;
+		return 'points' in route ? undefined : route.blockers.length > 0 ? blockedReason(route) : '';
 	});
 }
 

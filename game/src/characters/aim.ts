@@ -31,14 +31,15 @@ export function aimAlong(world:DemoWorld, character:GameObject, forward:XZ, rang
 	return best;
 }
 
-export function aimTarget(world:DemoWorld, character:GameObject):GameObject | null {
+/** What `character` aims at near the cursor: a thing or an item, and with a weapon in hand (`armed`) a living person. */
+export function aimTarget(world:DemoWorld, character:GameObject, armed = false):GameObject | null {
 	const hit = world.groundHit;
 	let best:GameObject | null = null;
 	let bestScore = Infinity;
 	for (const go of world.objects) {
 		const near = distanceXZ(character, go);
 		const human = go.getComponent(HumanBody);
-		if (go === character || near > USE_RANGE || (human && (go.getComponent(Vitals)?.hp ?? 1) <= 0)) {
+		if (go === character || near > USE_RANGE || (human && (!armed || (go.getComponent(Vitals)?.hp ?? 1) <= 0))) {
 			continue;
 		}
 		// Things that tell minds they can be acted on; the prominent ones win close calls.

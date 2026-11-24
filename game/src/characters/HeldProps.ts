@@ -1,4 +1,4 @@
-import { MeshRenderer, Time, closeHand, create, holdInHand, otherHand, type Grip, type Hand, Component } from '@arc-director/kindling';
+import { MeshRenderer, Time, closeHand, create, degrees, holdInHand, otherHand, type Grip, type Hand, Component } from '@arc-director/kindling';
 import * as THREE from 'three';
 import { HumanBody, Light } from '../engine/components';
 import { bindMesh } from '../engine/demo-mesh-renderer';
@@ -9,28 +9,29 @@ import { showFlameFrame } from '../render/spritesheet';
 import { addFlameLight } from '../kit/torches/torch';
 
 /**
- * What an item looks like in the hand, by item def: its model, how the fist holds it, the hand it
- * shows in whichever hand slot holds it (a bow is gripped in the left, a staff in the right).
+ * What an item looks like in the hand, by item def: its model, how the right fist holds it (handles in the model's own
+ * meters, turns in degrees), the hand it shows in whichever hand slot holds it (a bow is gripped in the left, a staff in
+ * the right).
  */
 const HELD:Record<string, { meshID:string; grip:Grip; hand?:Hand }> = {
-	iron_sword: { meshID: 'Sword', grip: { at: 0.87, tilt: 2.1 } },
+	iron_sword: { meshID: 'Sword', grip: { handle: new THREE.Vector3(0, 0.87, 0), turn: degrees(-90, 0, 120.3) } },
 	// Straight through the fist, so a hand hanging at the side carries it level.
-	short_bow: { meshID: 'ShamanBow', grip: {}, hand: 'left' },
-	bone_bow: { meshID: 'SkeletalBow', grip: {}, hand: 'left' },
-	oak_staff: { meshID: 'Staff', grip: { at: 0.62 }, hand: 'right' },
-	shaman_staff: { meshID: 'ShamanStaff', grip: { at: 0.6 }, hand: 'right' },
-	// Out ahead and up, away from the body: tipped toward the elbow it runs up the hanging arm, flame at the shoulder.
-	wooden_torch: { meshID: 'held_torch', grip: { at: 0.3, tilt: 0.7 } },
+	short_bow: { meshID: 'ShamanBow', grip: { turn: degrees(-90, 0, 0) }, hand: 'left' },
+	bone_bow: { meshID: 'SkeletalBow', grip: { turn: degrees(-90, 0, 0) }, hand: 'left' },
+	oak_staff: { meshID: 'Staff', grip: { handle: new THREE.Vector3(0, 1.054, 0), turn: degrees(90, 0, 180) }, hand: 'right' },
+	shaman_staff: { meshID: 'ShamanStaff', grip: { handle: new THREE.Vector3(0, 0.96, 0), turn: degrees(90, 0, 180) }, hand: 'right' },
+	// Straight through the fist, out ahead of a hanging one.
+	wooden_torch: { meshID: 'held_torch', grip: { turn: degrees(90, 0, 179.7) } },
 };
 
 /** Torch flame frames per second. */
 const FLAME_FPS = 10;
 
-type Held = { item:ItemInstance; prop:THREE.Object3D; mount:{ quaternion:THREE.Quaternion; position:THREE.Vector3 } };
+type Held = { item:ItemInstance; prop:THREE.Object3D };
 
 /** Shows the items in a character's hands on its model's hand bones, fists closed round them, and keeps held torches burning and lighting the way. */
 export class HeldProps extends Component {
-	// Before `CharacterPose`, which poses held things further (a bow drawn from this carry).
+	// Before `CharacterPose`, which poses the hands holding them (a bow drawn from this carry).
 	public static override order = Order.present - 2;
 
 	private _root:THREE.Object3D | null = null;
@@ -41,15 +42,18 @@ export class HeldProps extends Component {
 		return this._held[hand]?.prop;
 	}
 
-	/** The top end of the model in `hand` (a staff's head), in world space; undefined with nothing there. */
-	public tip(hand:Hand):THREE.Vector3 | undefined {
+	/**
+	 * The point `share` of the way up the long axis of the model in `hand`, from its bottom end (0: a sword's tip) to its
+	 * top (1: a staff's head), in world space; undefined with nothing there.
+	 */
+	public along(hand:Hand, share:number):THREE.Vector3 | undefined {
 		const prop = this.prop(hand);
 		if (!prop) {
 			return undefined;
 		}
 		prop.updateMatrixWorld(true);
-		const top = (prop.userData.top ??= localTop(prop)) as number;
-		return prop.localToWorld(new THREE.Vector3(0, top, 0));
+		const box = (prop.userData.box ??= localBox(prop)) as THREE.Box3;
+		return prop.localToWorld(new THREE.Vector3(0, THREE.MathUtils.lerp(box.min.y, box.max.y, share), 0));
 	}
 
 	/** The item shown in `hand`. */
@@ -104,15 +108,12 @@ export class HeldProps extends Component {
 					bindMesh(look.meshID);
 					const prop = create(look.meshID);
 					if (prop && holdInHand(root, hand, prop, look.grip)) {
-						this._held[hand] = { item, prop, mount: { quaternion: prop.quaternion.clone(), position: prop.position.clone() } };
+						this._held[hand] = { item, prop };
 					}
 				}
 			}
 			const held = this._held[hand];
 			if (held) {
-				// Back in the fist as `holdInHand` put it; `CharacterPose` may turn it again this frame (a bow raised).
-				held.prop.quaternion.copy(held.mount.quaternion);
-				held.prop.position.copy(held.mount.position);
 				// The fist closes round it, whatever the clip does with the fingers.
 				closeHand(root, hand, 1);
 				burn(held.prop, held.item.Torch?.lit === true);
@@ -131,23 +132,8 @@ export class HeldProps extends Component {
 	}
 }
 
-/** Turns a held prop about its `Grip` node to `turn` (world rotation), the grip staying in the fist. */
-export function turnAboutGrip(prop:THREE.Object3D, turn:THREE.Quaternion):void {
-	const parent = prop.parent;
-	const grip = prop.getObjectByName('Grip');
-	if (!parent || !grip) {
-		return;
-	}
-	prop.updateMatrixWorld(true);
-	const gripAt = grip.getWorldPosition(new THREE.Vector3());
-	const gripLocal = prop.worldToLocal(gripAt.clone());
-	prop.quaternion.copy(parent.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(turn));
-	prop.position.copy(parent.worldToLocal(gripAt)).sub(gripLocal.multiply(prop.scale).applyQuaternion(prop.quaternion));
-	prop.updateMatrixWorld(true);
-}
-
-/** How far up its long axis (+Y) a prop's meshes reach, in the prop's own space. */
-function localTop(prop:THREE.Object3D):number {
+/** The box a prop's meshes fill, in the prop's own space. */
+function localBox(prop:THREE.Object3D):THREE.Box3 {
 	const toProp = prop.matrixWorld.clone().invert();
 	const box = new THREE.Box3();
 	prop.traverse((obj) => {
@@ -157,7 +143,7 @@ function localTop(prop:THREE.Object3D):number {
 			box.union(mesh.geometry.boundingBox!.clone().applyMatrix4(toProp.clone().multiply(mesh.matrixWorld)));
 		}
 	});
-	return box.max.y;
+	return box;
 }
 
 /** Shows and flickers a held torch's flame while it is lit. */

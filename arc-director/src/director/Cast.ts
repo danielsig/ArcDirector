@@ -8,6 +8,7 @@ import { validateArc } from '../arc/validate.js';
 import type { ArcRunner, RunnerOptions } from '../character/arc-runner.js';
 import { Character, type CharacterJSON } from '../character/Character.js';
 import type { Goal, Kit, KitSource } from '../character/character-types.js';
+import { KNOWS_ALL, type Knows } from '../character/NameBook.js';
 import { Persona } from '../character/Persona.js';
 import { FORGETFULNESS, MAX_EPISODIC, MemoryPool, MemorySharing, type MemoryHolding } from '../memory/store.js';
 import { Collective, type CollectiveFields } from '../collective/Collective.js';
@@ -350,10 +351,21 @@ export class Cast<TCtx> {
 		this.unwire(collective);
 	}
 
-	/** Every feature meets a runner that joined. */
+	/** A runner joined: its names know whom its spec says ({@link knownBySpec}), and every feature meets it. */
 	private added(runner:ArcRunner<TCtx>):void {
+		runner.persona.names.knowsBySpec = (id) => this.knownBySpec(runner, id);
 		internalsOf(this._director).watches.stampPrev(runner);
 		internalsOf(this._director).features.forEach((feature) => feature.runnerAdded(runner));
+	}
+
+	/** What `runner` knows of `id` by its spec's `knows` (`PersonaSpec.knows`), a collective by its characters' too. */
+	private knownBySpec(runner:ArcRunner<TCtx>, id:string):Knows[] {
+		const target = this.rows.get(id)?.runner;
+		if (!(target instanceof Character)) {
+			return [];
+		}
+		const specs = [runner, ...runner instanceof Collective ? runner.characters : []].map(({ persona }) => persona.knows ?? {});
+		return specs.flatMap((spec) => Object.entries(spec).filter(([entry]) => target.is(entry)).flatMap(([, knows]) => (knows === true ? KNOWS_ALL : knows)));
 	}
 
 	/** A spec naming a System One or a chat model this director lacks is a typo; caught when it is wired. */
@@ -532,7 +544,7 @@ export class Cast<TCtx> {
 				return {
 					run: live?.run ?? NO_MODEL,
 					vision: live?.vision ?? false,
-					contextTokens: live?.slotContext,
+					contextTokens: live?.slotContext(),
 					thinking: live?.thinking ?? false,
 					promptStyle: live?.prompt ?? 'full',
 					jsonOnly: trainedOnArcDirector(live?.id ?? ''),

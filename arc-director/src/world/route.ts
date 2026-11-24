@@ -17,10 +17,19 @@ export function createAt<TEntity, TPoint extends Vec>(world:RouteWorld<TEntity, 
 }
 
 /** Points to pass through after the start, and the total cost. */
-export type Route<TPoint extends Vec = Vec> = { points:TPoint[]; cost:number };
+export interface Route<TPoint extends Vec = Vec> {
+	points:TPoint[];
+	cost:number;
+}
 
-/** No open way. Each blocked step that leads there, with the cost of the cheapest route through it, cheapest first. */
-export type Blocked = { blockers:{ reason:NamingText; cost:number; by?:string }[] };
+/**
+ * No open way. Each blocked step that leads there, with the cost of the cheapest route through it, cheapest first
+ * (none when nothing that can be cleared stands in the way), and the open route to where the goal is nearest.
+ */
+export interface Blocked {
+	blockers:{ reason:NamingText; cost:number; by?:string }[];
+	nearest:Route;
+}
 
 /** Blocked ways named when there is no open way, cheapest first. */
 const BLOCKERS_TOLD = 3;
@@ -164,6 +173,7 @@ export function awayGoal(threat:Vec, keep:number):RouteGoal {
  * One search: open ways settle first, so an open route comes back exactly as if blocked steps did not exist.
  * Without one, the search goes on through blocked steps, once per first blocker, and lists every blocker
  * that leads there. A blocked way that rejoins an open one is dropped: the blocker after it is the one to name.
+ * It then also gives the open route to where the goal is nearest (`goal.estimate`).
  */
 export function findRoute<TEntity, TPoint extends Vec = Vec>(
 	world:RouteWorld<TEntity, TPoint>,
@@ -171,7 +181,7 @@ export function findRoute<TEntity, TPoint extends Vec = Vec>(
 	from:Vec,
 	goal:RouteGoal,
 	cap = SEARCH_CAP,
-):Route<TPoint> | Blocked | undefined {
+):Route<TPoint> | Blocked {
 	const end = goal.at && createAt(world, goal.at);
 	// The steps into the goal's own point, by where each leaves from: the only ways a route ends on it.
 	const entries = new Map<string, Passage>();
@@ -191,6 +201,8 @@ export function findRoute<TEntity, TPoint extends Vec = Vec>(
 	const start:Node<TPoint> = { point: here, key: keyOf(here), cost: 0, rank: goal.estimate(from) };
 	const best = new Map<string, number>([[start.key, 0]]);
 	const openlyReached = new Set<string>();
+	let nearest = start;
+	let nearestLeft = goal.estimate(here);
 	/** The cheapest cost to the goal through each blocker that leads there, by its number. */
 	const blockers = new Map<number, number>();
 	/** Each blocker met, numbered by its `blocked` (a function by identity), with what blocks where `getPassage` said. */
@@ -236,6 +248,10 @@ export function findRoute<TEntity, TPoint extends Vec = Vec>(
 		}
 		if (node.via === undefined) {
 			openlyReached.add(key);
+			const left = goal.estimate(node.point);
+			if (left < nearestLeft) {
+				[nearest, nearestLeft] = [node, left];
+			}
 		}
 		const entry = entries.get(key);
 		if (entry) {
@@ -245,7 +261,7 @@ export function findRoute<TEntity, TPoint extends Vec = Vec>(
 			relax(node, point, passage, keyOf(point));
 		}
 	}
-	return blockers.size > 0 ? { blockers: [...blockers].map(([blocker, cost]) => ({ ...met[blocker], cost })) } : undefined;
+	return { blockers: [...blockers].map(([blocker, cost]) => ({ ...met[blocker], cost })), nearest: routeTo(nearest) };
 }
 
 /**

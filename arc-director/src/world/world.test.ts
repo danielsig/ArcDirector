@@ -282,8 +282,8 @@ describe('findRoute', () => {
 
 	it('names the blocker when a blocked step is the only way, and gives up past the cap', () => {
 		const gated:RouteWorld<string> = { getNeighbors: lineNeighbors, getPassage: (who, from, to) => (to[0] === 2 ? { blocked: 'Gate is shut' } : {}) };
-		assert.deepEqual(findRoute(gated, 'Ann', [0], pointGoal([4])), { blockers: [{ reason: 'Gate is shut', cost: 4 }] });
-		assert.equal(findRoute(line, 'Ann', [0], pointGoal([1e6]), 50), undefined);
+		assert.deepEqual(findRoute(gated, 'Ann', [0], pointGoal([4])), { blockers: [{ reason: 'Gate is shut', cost: 4 }], nearest: { points: [[1]], cost: 1 } });
+		assert.ok('blockers' in findRoute(line, 'Ann', [0], pointGoal([1e6]), 50));
 	});
 
 	it('names every locked way in, cheapest first, and only those that lead there', () => {
@@ -311,7 +311,7 @@ describe('findRoute', () => {
 		const roads:[Vec, Vec][] = [[[0, 0], [2, 0.5]], [[2, 0.5], [6, 0]], [[0, 0], [0, -3]], [[0, -3], [5, -3]]];
 		const world = openWays((point) => roads.flatMap(([a, b]) => (distance(a, point) < 1e-9 ? [b] : distance(b, point) < 1e-9 ? [a] : [])));
 		assert.deepEqual(openRoute(findRoute(world, 'Ann', [0, 0], awayGoal([1, 0], 5))).points, [[0, -3], [5, -3]]);
-		assert.equal(findRoute(world, 'Ann', [0, 0], awayGoal([1, 0], 50)), undefined, 'cornered: no way that far');
+		assert.equal('blockers' in findRoute(world, 'Ann', [0, 0], awayGoal([1, 0], 50)), true, 'cornered: no way that far');
 	});
 
 	it('does not treat range through a wall as arrived; it goes around', () => {
@@ -332,7 +332,7 @@ describe('findRoute', () => {
 			getNeighbors: (point) => [Math.round(point[0]) - 1, Math.round(point[0]) + 1].filter((next) => next >= 0 && next <= 3).map((next) => [next]),
 			getPassage: (who, from, to) => (Math.round(to[0]) === ledge ? undefined : {}),
 		};
-		assert.equal(findRoute(grid, 'Ann', [0], pointGoal([2.2])), undefined, 'climbed the ledge on the last step');
+		assert.equal('blockers' in findRoute(grid, 'Ann', [0], pointGoal([2.2])), true, 'climbed the ledge on the last step');
 		assert.deepEqual(openRoute(findRoute(grid, 'Ann', [2], pointGoal([0.2]))).points, [[1], [0.2]]);
 	});
 
@@ -564,18 +564,35 @@ describe('Mover', () => {
 		const way = unit(spot)!;
 		const { order, ticks, points } = await crowdAt([0, 0], { Ann: [8, -6], Bo: [2, 6] }, 'line', 2.5, { ahead: 2, aside: 1 });
 		assert.deepEqual(order, ['Ann', 'Bo']);
-		assert.ok(ticks.some((at) => distance(at.get('Bo')!, [spot[0] + way[0], spot[1] + way[1]]) < 0.1), 'Bo waited a pace behind the spot');
+		// A pace behind the spot, or two while Ann came round to the line's back.
+		assert.ok(ticks.some((at) => [1, 2].some((paces) => distance(at.get('Bo')!, [spot[0] + way[0] * paces, spot[1] + way[1] * paces]) < 0.1)), 'Bo waited behind the spot');
 		assert.ok(distance(points.get('Bo')!, spot) < 0.5, 'then Bo stood at the spot');
-		// Ann came round from behind the target and walked in along the line, not across it.
-		const last = ticks.length - 1 - [...ticks].reverse().findIndex((tick, i) => distance(tick.get('Ann')!, ticks.at(-2 - i)?.get('Ann') ?? tick.get('Ann')!) > 0);
-		assert.ok(distance(ticks[last].get('Ann')!, spot) < 0.5, 'Ann was served at the spot');
-		const step = unit([0, 1].map((i) => ticks[last].get('Ann')![i] - ticks[last - 2].get('Ann')![i]))!;
-		assert.ok(-(step[0] * way[0] + step[1] * way[1]) > 0.85, `walked in along the line: ${step}`);
+		// Ann came round from behind the target and stepped in along the line, not across it.
+		const moves = ticks.map((tick) => tick.get('Ann')!).filter((at, i, all) => i === 0 || distance(at, all[i - 1]) > 0);
+		assert.ok(distance(moves.at(-1)!, spot) < 0.1, `Ann was served on the spot: ${moves.at(-1)}`);
+		const step = unit([0, 1].map((i) => moves.at(-1)![i] - moves.at(-2)![i]))!;
+		assert.ok(-(step[0] * way[0] + step[1] * way[1]) > 0.85, `stepped in along the line: ${step}`);
 	});
 
 	it('stops on a serving spot out of its reach, never past it into the target', async () => {
 		const { points } = await crowdAt([0, 0], { Ann: [0, 9] }, 'line', 1, { ahead: 3 });
 		assert.ok(distance(points.get('Ann')!, [0, 3]) < 0.1, `on the spot: ${points.get('Ann')}`);
+	});
+
+	it('stands the first who walks up on the serving spot however far it reaches, stepping in at the target', async () => {
+		const { ticks, points } = await crowdAt([0, 0], { Ann: [5, 3] }, 'line', 4, { ahead: 2 });
+		// Never short of the spot, where reach begins; here a walker's steps are 0.3, so its last may cross the spot's edge.
+		const at = points.get('Ann')!;
+		assert.ok(at[1] <= 2 && distance(at, [0, 2]) < 0.4, `on the spot: ${at}`);
+		const moves = ticks.map((tick) => tick.get('Ann')!).filter((at, i, all) => i === 0 || distance(at, all[i - 1]) > 0);
+		const [from, to] = [moves.at(-2)!, moves.at(-1)!];
+		const step = unit([to[0] - from[0], to[1] - from[1]])!;
+		assert.ok(-step[1] > 0.95, `its last step heads at the target: ${step}`);
+	});
+
+	it('leaves the first where it stands when in front of the target and in reach before its first step, as one ordering from a seat', async () => {
+		const { points } = await crowdAt([0, 0], { Ann: [0.5, 4] }, 'line', 6, { ahead: 2 });
+		assert.deepEqual(points.get('Ann'), [0.5, 4]);
 	});
 
 	it('spreads round the target in a ring, each in its own place', async () => {
@@ -877,7 +894,7 @@ describe('stock world verbs', () => {
 		grid.doorLocked = true;
 		const { director } = await run(grid, 'go_to(Well)', { kit: ['go_to', 'wait'], seconds: 2 });
 		assert.equal(showNamingText(director.character('Ann')!.lastResult?.reason ?? ''), 'no way to Well, blocked on the way: Door is locked');
-		assert.deepEqual(grid.point.get('Ann'), [0, 0]);
+		assert.deepEqual(grid.point.get('Ann'), [2, 0], 'having come as near as it can');
 		director.dispose();
 	});
 
@@ -903,7 +920,7 @@ describe('stock world verbs', () => {
 			const spoken:string[] = [];
 			const { director } = await run(grid, 'say(text=Hello, to=Bo)', { kit: ['say', 'wait'], before: talkOn(grid, spoken) });
 			assert.deepEqual(spoken, []);
-			assert.deepEqual(grid.point.get('Ann'), [0, 0]);
+			assert.deepEqual(grid.point.get('Ann'), [4, 0], 'having come as near as it can');
 			director.dispose();
 		});
 	});

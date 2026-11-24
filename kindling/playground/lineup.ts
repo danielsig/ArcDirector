@@ -6,6 +6,7 @@
 //   ?base=/@fs/…/  load models from another folder (e.g. the raw sources, which keep their own clips)
 //   ?camY=0.4&camZ=6  camera height and distance; ?frames=60 waits that many frames before "ready"
 //   ?right=Sword&left=ShamanBow  props in hand (grips in PROPS); ?draw=1 draws a left-hand bow to the right hand
+//   ?turn=-90,0,120   every prop's turn in the hand instead (degrees, as a `Grip`'s)
 //   ?look=1           heads turn to the camera; ?reach=right reaches that hand ahead at chest height
 // The title turns to "ready" once every model has drawn, for headless screenshots.
 import * as THREE from 'three';
@@ -20,6 +21,7 @@ import {
 	registerToonClips,
 	registerToonModel,
 	toonClip,
+	degrees,
 	holdInHand,
 	lookAt,
 	reach,
@@ -37,11 +39,11 @@ const CHARACTERS = [
 
 /** Hand-held props: height (m) and how the hand holds each. */
 const PROPS:Record<string, { height:number; grip:Grip }> = {
-	Sword: { height: 1, grip: { at: 0.87, tilt: Math.PI + 0.4 } },
-	Staff: { height: 1.7, grip: { at: 0.62 } },
-	ShamanStaff: { height: 1.6, grip: { at: 0.6 } },
-	ShamanBow: { height: 1.2, grip: { tilt: 1 } },
-	SkeletalBow: { height: 1.2, grip: { tilt: 1 } },
+	Sword: { height: 1, grip: { handle: new THREE.Vector3(0, 0.87, 0), turn: degrees(-90, 0, -157.1) } },
+	Staff: { height: 1.7, grip: { handle: new THREE.Vector3(0, 1.054, 0), turn: degrees(90, 0, 180) } },
+	ShamanStaff: { height: 1.6, grip: { handle: new THREE.Vector3(0, 0.96, 0), turn: degrees(90, 0, 180) } },
+	ShamanBow: { height: 1.2, grip: { turn: degrees(-90, 0, 57.3) } },
+	SkeletalBow: { height: 1.2, grip: { turn: degrees(-90, 0, 57.3) } },
 };
 
 const params = new URLSearchParams(location.search);
@@ -89,12 +91,9 @@ class Pose extends Component {
 		}
 		this._props ??= held.flatMap(({ hand, prop }) => {
 			const obj = makeMesh(prop);
-			const g = { ...PROPS[prop]?.grip };
-			if (params.has('tilt')) {
-				g.tilt = Number(params.get('tilt'));
-				g.roll = Number(params.get('roll') ?? 0);
-			}
-			return obj && holdInHand(root, hand, obj, g) ? [{ hand, prop: obj }] : [];
+			const [x = 0, y = 0, z = 0] = params.get('turn')?.split(',').map(Number) ?? [];
+			const grip = params.has('turn') ? { ...PROPS[prop]?.grip, turn: degrees(x, y, z) } : PROPS[prop]?.grip ?? { turn: new THREE.Quaternion() };
+			return obj && holdInHand(root, hand, obj, grip) ? [{ hand, prop: obj }] : [];
 		});
 		if (params.get('look') === '1') {
 			lookAt(root, cam.transform.worldPositionVec(new THREE.Vector3()), 1);

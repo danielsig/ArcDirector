@@ -25,6 +25,8 @@ import { CameraFocus } from './CameraFocus';
 import { syncWaterAudio } from '../audio/water';
 import { autoShadowTier } from './auto-shadows';
 
+/** Seconds per step a scrub runs the game to its moment in. */
+const SCRUB_STEP = 1 / 60;
 /** Keys the game uses, so the browser does not also scroll, move focus or open Quick Find. */
 const GAME_KEYS = new Set([
 	'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyE', 'KeyF', 'KeyG', 'KeyX',
@@ -173,6 +175,14 @@ export class DemoGame extends Game<DemoWorld> {
 		const perf = this.world.perf;
 		const start = performance.now();
 		const director = perf.totalMS.director;
+		// A scrub runs to its moment in small steps, then holds it: each frame poses again at dt 0, nothing moving on.
+		for (let left = this.session.scrub ?? 0; left > 1e-6; left -= SCRUB_STEP) {
+			super.tick(Math.min(SCRUB_STEP, left));
+		}
+		if (this.session.scrub !== null) {
+			this.session.scrub = 0;
+			dt = 0;
+		}
 		super.tick(dt);
 		perf.add('simulate', performance.now() - start - (perf.totalMS.director - director));
 		this.syncAudio();

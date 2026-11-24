@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { BrowserProvider, contextCap, inPageFetch, loadFailure, storedModels, type WllamaEngine } from './browser.js';
+import { BrowserProvider, contextCap, contextToLoad, inPageFetch, loadFailure, storedModels, type WllamaEngine } from './browser.js';
 import { ggufMetadata } from './gguf.js';
 import { HttpProvider } from './http.js';
 import { JevSystemOne } from './system-one.js';
@@ -144,7 +144,7 @@ describe('browser', () => {
 		assert.equal(loadFailure([]), null, 'an engine that says nothing of layers is taken at its word');
 	});
 
-	it("reads a model's header, and caps each think's context below what one GPU dispatch can re-rope", async () => {
+	it("reads a model's header, and caps its context, every think's share together, below what one GPU dispatch can re-rope", async () => {
 		const meta = await ggufMetadata(gguf({
 			'general.architecture': 'gemma4',
 			'tokenizer.ggml.tokens': ['<pad>', '<eos>', 'hi'],
@@ -158,6 +158,13 @@ describe('browser', () => {
 		// The default browser model: 16 384 tokens x 2 heads x 512 is 65 536 workgroups of 256, one past WebGPU's most.
 		assert.equal(contextCap(meta), 16128);
 		assert.equal(contextCap(new Map([['general.architecture', 'gemma4']])), null, 'a header that names no heads caps nothing');
+	});
+
+	it('loads its context in all, split evenly among its thinks in whole blocks, the whole held to the cap', () => {
+		assert.equal(contextToLoad(16384, 4), 16384, 'a quarter each, as LM Studio splits it');
+		assert.equal(contextToLoad(16384, 3), 3 * 5376, 'whole blocks of 256 each: llama.cpp would round 5461 up');
+		assert.equal(contextToLoad(32768, 4, 16128), 4 * 3840, 'one re-rope spans every share, so the cap holds all four together');
+		assert.equal(contextToLoad(2048, 16), 16 * 256, 'a block each at least');
 	});
 
 	it('is not found at any other path, as on a server without it', async () => {

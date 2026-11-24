@@ -183,6 +183,9 @@ const DEFAULT_THINKING_FLOOR = 64;
 /** What a reply stuck saying one thing over (`loops`) fails with. One stuck in its thought is asked again without one. */
 const LOOPING = / repeats itself in its (thought|answer)/;
 
+/** A request whose prompt leaves its reply too little of its slot's context: it would come back empty, so it is not sent. */
+class PromptTooLongError extends Error {}
+
 /** A request body's prompt tokens, roughly. `response_format` is grammar the server compiles, not prompt. */
 function promptTokens(body:Record<string, unknown>):number {
 	const prompt = { ...body };
@@ -576,9 +579,10 @@ export class HttpProvider implements InferenceProvider {
 		const send = (ask:ChatRequest):Promise<ChatResponse> => (this._loader.present ? this.dispatchChat(ask) : this.chatJit(ask));
 		try {
 			return await send(req).catch((err:unknown) => {
-				// Stuck repeating its thought: that turn failed, and is asked once more without thinking. One stuck in its
-				// answer has already handed the caller that much of it, so it fails.
-				if (!(err instanceof Error) || LOOPING.exec(err.message)?.[1] !== 'thought') {
+				// Stuck repeating its thought, or no room to think: that turn failed, and is asked once more without thinking.
+				// One stuck in its answer has already handed the caller that much of it, so it fails.
+				const thinkless = err instanceof PromptTooLongError ? this.thinkingOn(req) : err instanceof Error && LOOPING.exec(err.message)?.[1] === 'thought';
+				if (!thinkless) {
 					throw err;
 				}
 				return send({ ...req, enableThinking: false });
@@ -724,19 +728,23 @@ export class HttpProvider implements InferenceProvider {
 		return messages;
 	}
 
-	/** A reply over `wire`, and the whole reply's JSON for its id. `extra` adds fields to the request. */
+	/**
+	 * A reply over `wire`, and the whole reply's JSON for its id. `extra` adds fields to the request; `held` is what the
+	 * server already holds of the thread, read before `messages` but not sent again.
+	 */
 	private async chatVia(
 		wire:Wire,
 		req:ChatRequest,
 		messages:ChatMessage[],
 		extra:Record<string, unknown> = {},
+		held:ChatMessage[] = [],
 	):Promise<{ res:ChatResponse; json:Record<string, unknown> }> {
 		const body:Record<string, unknown> = { model: req.model, ...wire.body(req, messages, this.wireAsk(req)), ...extra, ...this.samplingBody(req) };
 		const allowance = this.thinkingAllowance(req);
 		if (this._budgetField && allowance !== undefined) {
 			body[this._budgetField] = allowance;
 		}
-		const cap = this.outputCap(req, body);
+		const cap = this.outputCap(req, promptTokens(body) + (held.length > 0 ? promptTokens({ held }) : 0));
 		if (cap !== undefined) {
 			body[wire.capField] = cap;
 		}
@@ -755,7 +763,7 @@ export class HttpProvider implements InferenceProvider {
 		const stored = key ? (this._threads.get(key) ?? []) : [];
 		const hit = key ? pickBestThread(stored, messages) : undefined;
 		const suffix = hit ? messages.slice(hit.prefixLen) : messages;
-		const { res, json } = await this.chatVia(responsesWire, req, suffix, hit ? { previous_response_id: hit.id } : {});
+		const { res, json } = await this.chatVia(responsesWire, req, suffix, hit ? { previous_response_id: hit.id } : {}, messages.slice(0, hit?.prefixLen ?? 0));
 		this._responses = true;
 		const id = json.id ?? json['response_id'];
 		if (key && typeof id === 'string') {
@@ -778,21 +786,27 @@ export class HttpProvider implements InferenceProvider {
 	/**
 	 * The most tokens the reply may run, within what its slot's context leaves; undefined leaves it to the server. A
 	 * thought on a budget gets its allowance and room to answer: the stream is cut at the allowance, but the server goes
-	 * on generating until it hits this, and a stalled page reads the whole backlog before it can cut.
+	 * on generating until it hits this, and a stalled page reads the whole backlog before it can cut. A slot's share is
+	 * what it holds with every slot busy; a lone request may fill more of a unified KV cache, so it gets at least its
+	 * allowance and room to answer (or the reply's own cap, when smaller), and throws only when the whole context lacks it.
 	 */
-	private outputCap(req:ChatRequest, body:Record<string, unknown>):number | undefined {
+	private outputCap(req:ChatRequest, prompt:number):number | undefined {
 		const thinking = this.thinkingOn(req);
-		const allowance = this.thinkingAllowance(req);
+		const allowance = thinking ? this.thinkingAllowance(req) : undefined;
 		let want = req.maxTokens ?? this._maxTokens ?? (thinking ? THINK_OUT : undefined);
-		if (thinking && allowance !== undefined) {
+		if (allowance !== undefined) {
 			want = Math.min(want ?? THINK_OUT, allowance + ANSWER_ROOM);
 		}
-		const slot = this._loader.slotContext(req.model);
-		if (want === undefined && slot === undefined) {
-			return undefined;
+		const context = this._loader.contextOf(req.model);
+		if (context === undefined) {
+			return want;
 		}
 		const cap = want ?? THINK_OUT;
-		return slot === undefined ? cap : Math.min(cap, Math.max(1, slot - promptTokens(body) - 32));
+		const least = Math.min(cap, (allowance ?? 0) + ANSWER_ROOM);
+		if (context.whole - prompt - 32 < least) {
+			throw new PromptTooLongError(`prompt too long: ≈${prompt} of the ${context.whole} tokens ${req.model} is loaded with, leaving under ${least} to ${allowance === undefined ? '' : 'think and '}answer in: raise contextLength`);
+		}
+		return Math.min(cap, Math.max(least, context.slot - prompt - 32));
 	}
 
 	private allowedReasoning(model:string):ReasoningOption[] | undefined {
@@ -826,9 +840,9 @@ export class HttpProvider implements InferenceProvider {
 			}
 			catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
-				// A reply stuck repeating itself came from the endpoint. A server without it is not asked again; one with it falls
-				// back for a reply it lost.
-				if (LOOPING.test(msg)) {
+				// A reply stuck repeating itself came from the endpoint, and a prompt too long is too long on either. A server
+				// without it is not asked again; one with it falls back for a reply it lost.
+				if (LOOPING.test(msg) || err instanceof PromptTooLongError) {
 					throw err;
 				}
 				if (this._responses !== true || / 404:| 405:/.test(msg)) {

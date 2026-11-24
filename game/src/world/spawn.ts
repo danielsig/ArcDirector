@@ -188,6 +188,7 @@ export function spawnNPC(world:DemoWorld, opts:NPCSpawnDef):GameObject {
 		if (opts.marketplaceNPC.kind === 'vendor') {
 			npc.postX = go.transform.position.x;
 			npc.postZ = go.transform.position.z;
+			npc.postYaw = go.transform.yaw;
 		}
 	}
 	if (opts.companion) {

@@ -114,6 +114,11 @@ export class Character<TCtx = unknown> extends ArcRunner<TCtx> {
 		return this._collective?.squadOf(this) ?? [this.id];
 	}
 
+	/** Whether it is what `entry` names, as a circle or a spec's `knows` does: its id, its collective's, or a tag it has. */
+	public is(entry:string):boolean {
+		return entry === this.id || entry === this._collective?.id || this.tags.includes(entry);
+	}
+
 	/**
 	 * Move into `collective`, straight from any other, or leave with `null`: then it thinks with a fresh mind of
 	 * its own when it had settings for one, else the host drives it. Its laws, tags and running arc come along.

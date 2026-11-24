@@ -42,6 +42,11 @@ export class Chest extends Component {
 		setOpen(this, open, unlock, SFX);
 	}
 
+	/** Why `item` may not go into it, or nothing: a chest takes anything there is room for. */
+	public refuses(item:ItemInstance):NamingText | undefined {
+		return undefined;
+	}
+
 	/** Its key opens it ({@link Lock.useKey}). */
 	public useOn(character:GameObject, item:ItemInstance):UseResult | undefined {
 		return this.gameObject.getComponent(Lock)?.useKey(character, item, () => this.setOpen(true, true));

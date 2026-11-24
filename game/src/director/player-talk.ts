@@ -1,4 +1,4 @@
-import { Time, distanceXZ, type GameObject } from '@arc-director/kindling';
+import { Time, distanceXZ, yawToForward, type GameObject } from '@arc-director/kindling';
 import { showNamingText, type ArcResult, type SpeechUtterance, type VerbCall } from 'arc-director';
 import { HumanBody, Named, idOf } from '../engine/components';
 import type { DemoWorld } from '../engine/demo-world';
@@ -55,6 +55,25 @@ export function nearestTalkPeer(world:DemoWorld, speakerID:string):string | unde
 	return nearbyTalkPeers(world, speakerID)[0];
 }
 
+/** Of `ids`, the one `speakerID` faces: nearest a point a meter in front of it, along its facing. */
+export function facedPeer(world:DemoWorld, speakerID:string, ids:readonly string[]):string | undefined {
+	const speaker = findObject(world, speakerID);
+	if (!speaker) {
+		return undefined;
+	}
+	const ahead = yawToForward(speaker.transform.yaw);
+	const front = { x: speaker.transform.position.x + ahead.x, z: speaker.transform.position.z + ahead.z };
+	let best:{ id:string; d:number } | undefined;
+	for (const id of ids) {
+		const go = findObject(world, id);
+		const d = go ? distanceXZ(go, front) : Infinity;
+		if (d < (best?.d ?? Infinity)) {
+			best = { id, d };
+		}
+	}
+	return best?.id;
+}
+
 export function playerSayCatalog(host:GameHost):SayCatalog {
 	const player = host.world.findByID('Player');
 	const peers = nearbyTalkPeers(host.world, 'Player');
@@ -102,7 +121,7 @@ export function talkOthers(world:DemoWorld, speakerID:string):string[] {
 	const speaker = findObject(world, speakerID);
 	const names:string[] = [];
 	for (const go of world.objects) {
-		if (!go.getComponent(HumanBody)) {
+		if (!go.getComponent(HumanBody) || !isLiving(go)) {
 			continue;
 		}
 		if (speaker) {
@@ -131,10 +150,10 @@ export function playerSay(host:GameHost, text:string):void {
 		playerSlash(host, slash);
 		return;
 	}
-	const peers = nearbyTalkPeers(host.world, 'Player');
 	const directed = parseDirectedLine(spoken, talkOthers(host.world, 'Player'));
 	const line = directed?.text ?? spoken;
-	const to = directed?.to ?? (peers.length <= 1 ? peers[0] : peers);
+	// Said to no one by name, it is said to the one in front: the rest only overhear it.
+	const to = directed?.to ?? facedPeer(host.world, 'Player', nearbyTalkPeers(host.world, 'Player'));
 	// A step, as a slash command is: a character of a crowd it names thinks for itself to answer (`withOwnMind`).
 	host.enactPlayer([{ verb: 'say', args: { text: line, ...to === undefined ? {} : { to } } }]).then(
 		(result) => result.status !== 'ok' && host.world.setMessage(showNamingText(result.reason ?? 'no one heard')),

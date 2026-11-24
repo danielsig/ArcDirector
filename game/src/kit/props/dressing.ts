@@ -4,7 +4,7 @@ import type { DemoChunk } from '../../world/demo-chunk';
 import type { GlyphTerrain } from '../../world/GlyphTerrain';
 import type { ChunkLayer } from '../../render/build-chunk-mesh';
 import { propParts } from './prop-meshes';
-import { treeParts } from '../trees/trees';
+import { treeGrowth, treeKind, treeParts } from '../trees/trees';
 
 export type DressingDraw = {
 	geom:THREE.BufferGeometry;
@@ -20,6 +20,9 @@ export type DressingDraw = {
 	sy:number;
 	sz:number;
 };
+
+/** How far apart in `age` the young trees of one legend glyph grow, so no two match. */
+const AGE_SPREAD = 0.2;
 
 /** Instanced draws for this chunk: props and trees. The road is part of the ground mesh; grass blades are `grass-batch.ts`. */
 function dressingDraws(chunk:DemoChunk, terrain:GlyphTerrain):DressingDraw[] {
@@ -42,14 +45,16 @@ function dressingDraws(chunk:DemoChunk, terrain:GlyphTerrain):DressingDraw[] {
 			continue;
 		}
 		const center = chunk.worldCellCenter(ent.localX, ent.localZ);
-		const kind = (ent.localX + ent.localZ) % 2 === 0 ? 'oak' : 'pine';
+		const kind = treeKind(ent, center);
 		const variant = Math.floor(hash(center.x, center.z, 13) * 8);
 		const s = 0.88 + hash(center.x, center.z, 9) * 0.28;
+		const age = ent.age === undefined ? 1 : THREE.MathUtils.clamp(ent.age + (hash(center.x, center.z, 16) - 0.5) * AGE_SPREAD, 0, 1);
+		const growth = treeGrowth(kind, age);
 		const x = center.x + (hash(center.x, center.z, 11) - 0.5) * 0.2;
 		const z = center.z + (hash(center.x, center.z, 12) - 0.5) * 0.2;
 		const yaw = hash(center.x, center.z, 14) * Math.PI * 2;
-		for (const part of treeParts(kind, variant)) {
-			draws.push({ geom: part.geom, mat: part.mat, cast: true, x, y: 0, z, rx: 0, ry: yaw, rz: 0, sx: s, sy: s, sz: s });
+		for (const part of treeParts(kind, variant, age)) {
+			draws.push({ geom: part.geom, mat: part.mat, cast: true, x, y: 0, z, rx: 0, ry: yaw, rz: 0, sx: s * growth.wide, sy: s * growth.tall, sz: s * growth.wide });
 		}
 	}
 	return draws;

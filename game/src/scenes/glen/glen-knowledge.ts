@@ -1,5 +1,16 @@
 import type { KnowledgeEntry } from 'arc-director';
 import { TREE, BOULDER, RIVER, TRADE } from '../../director/game-knowledge';
+import { getDef } from '../../items/defs';
+
+/** `seconds` as one would say it: "10 seconds", "2 minutes". */
+function duration(seconds:number):string {
+	return seconds % 60 === 0 ? `${seconds / 60} minute${seconds === 60 ? '' : 's'}` : `${seconds} seconds`;
+}
+
+const COOKS = getDef('silver_trout').components.Cookable!.seconds;
+const BURNS = COOKS + getDef('cooked_trout').components.Cookable!.seconds;
+/** How long a trout takes on the fire, as the item defs have it. */
+const TROUT_ON_FIRE = `On the spit over Campfire, a SilverTrout is CookedTrout after ${duration(COOKS)} and BurntTrout after ${duration(BURNS)}.`;
 
 export const GLEN_KNOWLEDGE:KnowledgeEntry[] = [
 	TREE,
@@ -33,12 +44,17 @@ export const GLEN_KNOWLEDGE:KnowledgeEntry[] = [
 	{
 		name: 'Food',
 		aliases: ['eat', 'eating', 'meal', 'hungry', 'hunger', 'dinner'],
-		text: 'SilverTrout, FireMushroom and MoonMushroom are all food. use(item=SilverTrout) eats what you carry. A meal keeps hunger away for a long time.',
+		text: 'CookedTrout, FireMushroom and MoonMushroom are food. use(item=CookedTrout) eats what you carry. A meal keeps hunger away for a long time. SilverTrout is raw fish: it must be cooked on Campfire before it is eaten.',
+	},
+	{
+		name: 'Campfire',
+		aliases: ['fire', 'cook', 'cooking', 'spit', 'camp', 'raw'],
+		text: `Forager's cooking fire, in a clearing among the trees west of Cottage, with a spit over it that holds one food at a time, like a chest. use(item=SilverTrout, target=Campfire) puts a raw fish on the spit. ${TROUT_ON_FIRE} Wait, then pick_up(item=CookedTrout, from=Campfire) before it burns.`,
 	},
 	{
 		name: 'Rest',
 		aliases: ['chair', 'chairs', 'seat', 'bed', 'beds', 'sleep', 'sit', 'nap', 'tired'],
-		text: 'sit(target=HutChair) sits you on a chair and sleep(target=HutBed) puts you to bed; walking off gets you up. CottageChair, HutChair and RiverChair are the chairs, CottageBed and HutBed the beds.',
+		text: 'sit(target=HutChair) sits you on a chair and sleep(target=HutBed) puts you to bed; walking off gets you up. CottageChair, HutChair and RiverChair are the chairs, CottageBed, HutBed and Forager\'s Bedroll by Campfire the beds.',
 	},
 	{
 		name: 'Fishing',
@@ -76,7 +92,19 @@ export const GLEN_KNOWLEDGE:KnowledgeEntry[] = [
 	{
 		name: 'SilverTrout',
 		aliases: ['trout', 'fish', '5 gold'],
-		text: 'Item. Worth 5 gold. Angler sells it, and fishes for more. use(item=SilverTrout) eats it: a meal.',
+		text: `Item. Raw fish, worth 5 gold. Angler sells it, and fishes for more. Cook it on Campfire before eating it: raw, it cannot be eaten. ${TROUT_ON_FIRE}`,
+		item: true,
+	},
+	{
+		name: 'CookedTrout',
+		aliases: ['cooked fish', 'cooked trout'],
+		text: `Item. A SilverTrout cooked on Campfire, worth 6 gold. use(item=CookedTrout) eats it: a meal. ${TROUT_ON_FIRE}`,
+		item: true,
+	},
+	{
+		name: 'BurntTrout',
+		aliases: ['burnt fish', 'burned trout'],
+		text: 'Item. A trout left on Campfire too long: charred, not fit to eat, worth nothing.',
 		item: true,
 	},
 	{

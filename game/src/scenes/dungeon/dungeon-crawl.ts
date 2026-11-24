@@ -1,8 +1,9 @@
-import { GameObject, Time, distanceXZ, inBounds } from '@arc-director/kindling';
+import { BoxCollider, GameObject, Time, distanceXZ, inBounds } from '@arc-director/kindling';
+import { CharacterMotor } from '../../characters/CharacterMotor';
 import { parseArc, type ArcDirector, TalkInstructions, type CollectiveSpec, type Goal, type LawSpec, type MemoryDraft, type RegionSpec, type SpeechUtterance, type TalkStyle } from 'arc-director';
 import { Confine } from '../../characters/Confine';
 import { Leash } from '../../characters/Leash';
-import { Celebrating, Named, Vitals, idOf } from '../../engine/components';
+import { Celebrating, Lock, Named, Vitals, idOf } from '../../engine/components';
 import { findCarried, itemMatchesName } from '../../items/inventory';
 import type { GameHost } from '../../director/adapter';
 import { ATTACKS, HEAL } from '../../director/fight';
@@ -181,9 +182,10 @@ const SUCCESSION:MemoryDraft = {
 /**
  * A step on the way to the crown: where it is done and what is to be done there; `label` is what the goal track says of
  * it. `how` makes it a puzzle, anyone's to solve, and is its answer, told only once it has stalled: until then the
- * party works it out. `room` is the room it is done in, whose monsters stand in the way of it.
+ * party works it out. `room` is the room it is done in, whose monsters stand in the way of it. `gather` sends each of the
+ * party there on its own instead of behind its leader.
  */
-type Step = { done:(host:GameHost)=>boolean; where:string; text:string; how?:string; room?:string; label:string };
+type Step = { done:(host:GameHost)=>boolean; where:string; text:string; how?:string; room?:string; gather?:boolean; label:string };
 
 /** The way to the crown, in order. The first step not done is the party's one goal, so nobody has to ask where to go. */
 const STEPS:Step[] = [
@@ -192,8 +194,79 @@ const STEPS:Step[] = [
 	{ done: (host) => opened(host, 'CryptGate') || partyHolds(host, 'CryptKey'), where: 'OssuaryChest', room: 'Ossuary', text: 'find CryptKey', label: 'Find CryptKey in the Ossuary', how: 'pick_up(item=CryptKey, from=OssuaryChest)' },
 	{ done: (host) => opened(host, 'CryptGate'), where: 'CryptGate', text: 'open CryptGate', label: 'Unlock CryptGate', how: 'use(item=CryptKey, target=CryptGate)' },
 	{ done: (host) => !isLiving(host.world.findByID(BOSS)), where: BOSS, room: 'ThroneCrypt', text: `kill the ${BOSS}`, label: `Slay the ${BOSS}` },
-	{ done: (host) => partyHolds(host, PRIZE), where: 'HoardChest', text: `take the ${PRIZE}`, label: `Claim the ${PRIZE}`, how: `pick_up(item=${PRIZE}, from=HoardChest)` },
+	// Won for good once the party is on its way out: gone up the stairs, nobody here holds it.
+	{ done: (host) => host.sceneState().bargainDone || partyHolds(host, PRIZE), where: 'HoardChest', text: `take the ${PRIZE}`, label: `Claim the ${PRIZE}`, how: `pick_up(item=${PRIZE}, from=HoardChest)` },
 ];
+
+/** Meters from a fallen companion's body within which a line said is said over it. */
+const FAREWELL_REACH = 5;
+
+/** The companions lying dead in the crypt (not those gone up the stairs). */
+function fallen(host:GameHost):string[] {
+	return PARTY.filter((id) => {
+		const go = findObject(host.world, id);
+		return !!go && !isLiving(go);
+	});
+}
+
+/** Lines said over a fallen companion's body, by anyone, that end its farewell. */
+const FAREWELL_LINES = 2;
+
+/** Once the crown is won, the last step before the stairs: `FAREWELL_LINES` lines said over `id`'s body. */
+function farewell(id:string):Step {
+	return {
+		done: (host) => (host.sceneState<Crawl>().mourned?.[id]?.length ?? 0) >= FAREWELL_LINES,
+		where: id,
+		text: `bid ${id} farewell: gather by the body, and say a line or two over it to them, a last word or a memory of them, never a prayer. Like: say(text="...", to=${id})`,
+		gather: true,
+		label: `Bid ${id} farewell`,
+	};
+}
+
+/** The way out of the crypt, in order: the way to the crown, then a farewell to each companion who fell on it. */
+function steps(host:GameHost):Step[] {
+	return [...STEPS, ...fallen(host).map(farewell)];
+}
+
+/** How sad a companion's death makes any of the party, however little they loved them; love makes it more. */
+const GRIEF = 0.4;
+
+/**
+ * A companion just fell: every survivor knows at once, wherever it is (the fall's own news reaches only who sees it,
+ * and this one takes its place), wakes to it, and grieves as much as it loved them.
+ */
+function heedFalls(host:GameHost):void {
+	const state = host.sceneState<Crawl>();
+	const news = fallen(host).filter((id) => !state.dead?.includes(id));
+	const arc = host.arc;
+	if (news.length === 0 || !arc) {
+		return;
+	}
+	state.dead = [...state.dead ?? [], ...news];
+	const living = PARTY.filter((id) => isLiving(findObject(host.world, id)));
+	for (const id of news) {
+		arc.pushEvent({ kind: 'Hurt', key: `fallen:${id}`, text: (name) => `${name(id)} has fallen`, knownBy: living, tags: ['fallen'], major: true });
+		for (const other of living) {
+			const love = arc.character(other)?.persona.memory.feelingsToward(arc.time).get(id)?.loving ?? 0;
+			arc.getFeelings()?.stir(other, { sad: Math.max(GRIEF, love) });
+		}
+	}
+}
+
+/** A survivor said `utterance` once the crown is won: a line over each fallen companion's body it stands by. */
+function mourn(host:GameHost, utterance:SpeechUtterance):void {
+	const speaker = findObject(host.world, utterance.speakerID);
+	if (!PARTY.includes(utterance.speakerID) || !isLiving(speaker) || !STEPS.every((s) => s.done(host))) {
+		return;
+	}
+	const mourned = host.sceneState<Crawl>().mourned ??= {};
+	for (const id of fallen(host)) {
+		const body = findObject(host.world, id)!;
+		if (distanceXZ(speaker, body) <= FAREWELL_REACH && (mourned[id]?.length ?? 0) < FAREWELL_LINES) {
+			(mourned[id] ??= []).push(utterance.speakerID);
+		}
+	}
+}
 
 const NEAREST_FOE = 'others.filter("enemy").minBy(u => distance(me, u))';
 
@@ -245,8 +318,11 @@ const LEARN:Goal = {
 /** Game seconds a puzzle may go unsolved before its answer is told to the party. */
 const STALL_SECONDS = 60;
 
-/** How `id` gets to where `step` is done: the leader walks in front, everyone else close behind. */
+/** How `id` gets to where `step` is done: the leader walks in front, everyone else close behind; to a gathering, each its own way. */
 function wayThere(id:string, leader:string, step:Step):string {
+	if (step.gather) {
+		return `Each of you go_to(${step.where}) yourself, and stay there until it is done.`;
+	}
 	return id === leader
 		? `Lead the way in front: go_to(${step.where}), and wait for anyone who falls behind. Once the fight is over and no monster is left near, never lead on into the next room while anyone of the party has less than half their health: wait where you are, tell Seraphine once, briefly, whom to heal, and go on only once they are healed. In a fight, this does not apply: fight.`
 		: `Stay close behind ${leader}, never ahead: follow(${leader}); ${leader} leads you to ${step.where}, so never go_to it yourself.`;
@@ -259,6 +335,7 @@ function wayThere(id:string, leader:string, step:Step):string {
 const QUESTS = {
 	king: `Advance from room to room until you reach the ${BOSS}; then kill him and get the treasure. You need not know where he is or how the rooms join: the goal below is always the way on, so never search, recall or ask for the way.`,
 	loot: 'Get the treasure.',
+	mourn: 'The treasure is ours. Before we leave the crypt, we bid our fallen farewell.',
 };
 
 /**
@@ -287,12 +364,14 @@ function firstLiving(host:GameHost, ids:string[]):string | undefined {
 }
 
 /**
- * What the crawl keeps as it runs, saved with the game: who leads toward which step (its index in `STEPS`), since when
- * and whether it has stalled; and once the crown is won, when the party sets off for the stairs (`null` once it has)
- * and who of it is on the way out.
+ * What the crawl keeps as it runs, saved with the game: who leads toward which step (its index in `steps`), since when
+ * and whether it has stalled; which companions' deaths the party has heard of, and who said each line over each body;
+ * and once the way is done, when the party sets off for the stairs (`null` once it has) and who of it is on the way out.
  */
 type Crawl = {
 	briefed:{ leader:string; step:number; since:number; stalled:boolean };
+	dead?:string[];
+	mourned?:Record<string, string[]>;
 	leaving:{ at:number | null; ids:string[] };
 };
 
@@ -302,8 +381,9 @@ type Crawl = {
  */
 function briefParty(host:GameHost):void {
 	const leader = firstLiving(host, LEADERS);
-	const at = STEPS.findIndex((s) => !s.done(host));
-	const step = STEPS[at];
+	const way = steps(host);
+	const at = way.findIndex((s) => !s.done(host));
+	const step = way[at];
 	if (!leader || !step) {
 		return;
 	}
@@ -316,7 +396,7 @@ function briefParty(host:GameHost):void {
 	}
 	state.briefed = { leader, step: at, since, stalled };
 	// The king's step is the last before the treasure, so a new step after his is the leader's quest narrowing.
-	const quest = isLiving(host.world.findByID(BOSS)) ? 'king' : 'loot';
+	const quest = isLiving(host.world.findByID(BOSS)) ? 'king' : partyHolds(host, PRIZE) ? 'mourn' : 'loot';
 	for (const id of PARTY) {
 		const persona = host.arc?.character(id)?.persona;
 		if (persona) {
@@ -446,9 +526,12 @@ function dangerLaw(name:string, goal:string, choices:string[]):string {
 	return `law(name=${name}, watch=${FOES_NEAR}) {\n\tloop {\n\t\tchoose("${goal}") {\n${choices.map((choice) => `\t\t\t${choice}\n`).join('')}\t\t}\n\t}\n}`;
 }
 
+/** The party and Kaelen (`Player`), years on the road together: each knows the others' voices too. */
+const OLD_FRIENDS = Object.fromEntries([...PARTY, 'Player'].map((id) => [id, true as const]));
+
 /** Everyone in the crypt but Kaelen: the party, each set on the first step behind its leader, and the Horde. */
 export const DUNGEON_CAST:SceneCast = [
-	...COMPANIONS.map((member) => ({ ...member, goals: roleGoals(member.id, LEADERS[0], STEPS[0], false, 'king') })),
+	...COMPANIONS.map((member) => ({ ...member, knows: OLD_FRIENDS, goals: roleGoals(member.id, LEADERS[0], STEPS[0], false, 'king') })),
 	...MONSTERS,
 ];
 
@@ -553,8 +636,10 @@ function partyHolds(host:GameHost, name:string):boolean {
 	return party(host).some((go) => !!findCarried(go, (it) => itemMatchesName(it, name)));
 }
 
+/** Open, or unlocked: a walker shuts an unlocked door behind it, and anyone opens it again. */
 function opened(host:GameHost, name:string):boolean {
-	return !!host.world.findNamed(name)?.getComponent(Door)?.open;
+	const go = host.world.findNamed(name);
+	return !!go?.getComponent(Door)?.open || go?.getComponent(Lock)?.locked === false;
 }
 
 /** How much of a room's monsters is destroyed, 0 to 1: each one counts alike, the hurt in part. */
@@ -573,7 +658,7 @@ function roomCleared(host:GameHost, room:string):number {
  */
 function goals(host:GameHost):SceneGoals {
 	return {
-		left: { color: 'gold', goals: STEPS.map((step) => {
+		left: { color: 'gold', goals: steps(host).map((step) => {
 			const foes = step.room ? lairOf(host, step.room).length : 0;
 			return {
 				name: step.label,
@@ -584,6 +669,7 @@ function goals(host:GameHost):SceneGoals {
 }
 
 function onSpoke(host:GameHost, utterance:SpeechUtterance):void {
+	mourn(host, utterance);
 	const speaker = findObject(host.world, utterance.speakerID);
 	const door = host.world.findNamed('SealedDoor');
 	if (!speaker || !door || !ANSWER.test(utterance.text) || distanceXZ(speaker, door) > ANSWER_REACH) {
@@ -600,6 +686,15 @@ function onSpoke(host:GameHost, utterance:SpeechUtterance):void {
 /** Where the party came down, at the foot of the Gatehouse stairs: where it climbs out again once the crown is won. */
 const EXIT = 'Stairs';
 const EXIT_AT = { x: 8, z: 44.4 };
+/**
+ * Meters from the foot of the stairs within which one on the way out starts up them: a `go_to` stops at reach, and
+ * the party crowds round the spot.
+ */
+const EXIT_REACH = 3;
+/** Up the stairwell, past its top step: where a climber heads. */
+const STAIRS_TOP = { x: 8.5, z: 46.8 };
+/** How far up the stairwell a climber is gone under its ceiling. */
+const CLIMBED_Z = 45.9;
 /** Game seconds the party celebrates the crown before it heads for the stairs. */
 const CELEBRATE = 6;
 
@@ -638,16 +733,31 @@ function leaveCrypt(host:GameHost):void {
 	}
 }
 
-/** One of the party reached the stairs on the way out: gone up them. */
+/**
+ * One of the party reached the stairs on the way out: no longer a mind, it walks up them, through the stairwell's rock
+ * walls (nothing else can reach them), until `goneUp` takes it.
+ */
 function climbOut(host:GameHost, go:GameObject):void {
-	const id = idOf(go);
-	const out = host.sceneState<Crawl>().leaving;
-	if (out) {
-		out.ids = out.ids.filter((other) => other !== id);
+	host.arc?.removeCharacter(idOf(go));
+	go.getComponent(BoxCollider)!.solid = false;
+	go.getComponent(CharacterMotor)!.destinationPoint = STAIRS_TOP;
+}
+
+/** Whoever has climbed out of sight under the stairwell's ceiling is gone; the last one out says the party has left. */
+function goneUp(host:GameHost):void {
+	const out = host.sceneState<Crawl>().leaving!;
+	const up = out.ids.filter((id) => (findObject(host.world, id)?.transform.position.z ?? Infinity) >= CLIMBED_Z);
+	if (up.length === 0) {
+		return;
 	}
-	host.arc?.removeCharacter(id);
-	host.world.destroy(go);
-	if (!PARTY.some((other) => isLiving(findObject(host.world, other)) && other !== id)) {
+	up.forEach((id) => {
+		const go = findObject(host.world, id);
+		if (go) {
+			host.world.destroy(go);
+		}
+	});
+	out.ids = out.ids.filter((id) => !up.includes(id));
+	if (out.ids.length === 0) {
 		host.world.setMessage(`The party climbs out of the crypt with the ${PRIZE}`);
 	}
 }
@@ -655,23 +765,29 @@ function climbOut(host:GameHost, go:GameObject):void {
 function tickCrypt(host:GameHost):void {
 	if (host.sceneState().bargainDone) {
 		leaveCrypt(host);
+		goneUp(host);
 		return;
 	}
+	heedFalls(host);
 	briefParty(host);
 	forgetTeam(host);
 	leashParty(host);
 	if (!isLiving(host.world.findByID(BOSS))) {
 		openDoor(host, 'HoardGate', `The ${BOSS} falls, and HoardGate swings open`);
 	}
-	if (!partyHolds(host, PRIZE)) {
+	// The crown won and every fallen friend bid farewell: the stairs, after a cheer if nobody fell.
+	if (!steps(host).every((step) => step.done(host))) {
 		return;
 	}
 	host.sceneState().bargainDone = true;
 	host.world.setMessage(`The ${PRIZE} is won`);
-	for (const go of party(host)) {
-		go.getOrAddComponent(Celebrating).celebrateFor(CELEBRATE);
+	const cheer = fallen(host).length === 0 ? CELEBRATE : 0;
+	if (cheer) {
+		for (const go of party(host)) {
+			go.getOrAddComponent(Celebrating).celebrateFor(cheer);
+		}
 	}
-	host.sceneState<Crawl>().leaving = { at: Time.time + CELEBRATE, ids: [] };
+	host.sceneState<Crawl>().leaving = { at: Time.time + cheer, ids: [] };
 }
 
 export const DUNGEON_HOOKS:SceneHooks<GameHost> = { tick: tickCrypt, onSpoke, goals, canSeeInventoryOf: knowsCarried };
@@ -728,7 +844,7 @@ export function directDungeon(host:GameHost, director:ArcDirector<CharacterCtx, 
 			// The foot of the stairs: a companion on its way out who reaches it climbs out of the crypt.
 			Exit: {
 				center: [EXIT_AT.x, EXIT_AT.z],
-				radius: 1,
+				radius: EXIT_REACH,
 				who: ({ character }) => !!host.sceneState<Crawl>().leaving?.ids.includes(idOf(character)),
 				onEnter: ({ character }) => climbOut(host, character),
 			},

@@ -85,14 +85,14 @@ function itemTorchProp():THREE.Group {
 }
 
 /**
- * A torch to carry, standing up its +Y (for `holdInHand`): stick, pitch-soaked wrap, and two
+ * A torch to carry, standing up its +Y (for `holdInHand`): stick, pitch-soaked wrap, two
  * crossed flame cards (`userData.flame`, hidden until lit), so it reads from any side without
- * turning to the camera.
+ * turning to the camera, and a `Grip` node where the fist closes, low on the stick.
  */
 function heldTorchMesh():THREE.Group {
 	const g = new THREE.Group();
 	const { stick, wrap } = torchWood();
-	g.add(stick, wrap);
+	g.add(stick, wrap, Object.assign(new THREE.Object3D().translateY(0.24), { name: 'Grip' }));
 	const mat = flameMaterial(getSheet().flame[0]!);
 	const flame = new THREE.Group();
 	for (const turn of [0, Math.PI / 2]) {
@@ -161,10 +161,133 @@ function fireMushroom():THREE.Group {
 	return g;
 }
 
+/** A trout as it comes off the river, off the fire, or out of it too late: its skin, its fins. */
+interface TroutLook {
+	skin:(g:CanvasRenderingContext2D, w:number, h:number)=>void;
+	fin:number;
+}
+
+/** Strokes `n` lines down the skin picture, each from `x` at its top, slanting by `lean` (pixels across per down). */
+function slashes(g:CanvasRenderingContext2D, w:number, h:number, n:number, lean:number):void {
+	for (let i = 0; i < n; i++) {
+		const x = (i + 0.5) * w / n;
+		g.beginPath();
+		g.moveTo(x, 0);
+		g.lineTo(x + lean * h, h);
+		g.stroke();
+	}
+}
+
+/**
+ * Skins as pictures wrapped round the body: across is round the girth (the upper flank at 0 and the edges, the back
+ * at a quarter, the lower flank at half, the belly at three quarters), down is from the nose to the tail.
+ */
+const TROUT_LOOKS:Record<string, TroutLook> = {
+	item_trout: {
+		fin: 0x8a9aa6,
+		skin: (g, w, h) => {
+			const round = g.createLinearGradient(0, 0, w, 0);
+			[[0, '#c8d4dc'], [0.25, '#4a5a68'], [0.5, '#c8d4dc'], [0.75, '#f2f4f0'], [1, '#c8d4dc']].forEach(([at, color]) => round.addColorStop(at as number, color as string));
+			g.fillStyle = round;
+			g.fillRect(0, 0, w, h);
+			// The rosy line down each flank, and dark spots over the back.
+			g.fillStyle = 'rgba(216, 128, 140, 0.55)';
+			[0, w / 2 - 3, w - 3].forEach((x) => g.fillRect(x, h * 0.15, 6, h * 0.8));
+			g.fillStyle = '#26303a';
+			for (let i = 0; i < 26; i++) {
+				g.beginPath();
+				g.arc(w * (0.12 + 0.26 * ((i * 0.618) % 1)), h * (0.1 + 0.85 * ((i * 0.381) % 1)), 1.4, 0, Math.PI * 2);
+				g.fill();
+			}
+		},
+	},
+	item_trout_cooked: {
+		fin: 0x8a4a20,
+		skin: (g, w, h) => {
+			const round = g.createLinearGradient(0, 0, w, 0);
+			[[0, '#d89a50'], [0.25, '#8a5428'], [0.5, '#d89a50'], [0.75, '#eec080'], [1, '#d89a50']].forEach(([at, color]) => round.addColorStop(at as number, color as string));
+			g.fillStyle = round;
+			g.fillRect(0, 0, w, h);
+			// Charred marks where the skin met the hottest of the flames.
+			g.strokeStyle = 'rgba(58, 30, 12, 0.85)';
+			g.lineWidth = 3;
+			slashes(g, w, h, 9, 0.5);
+		},
+	},
+	item_trout_burnt: {
+		fin: 0x141010,
+		skin: (g, w, h) => {
+			g.fillStyle = '#2a2420';
+			g.fillRect(0, 0, w, h);
+			g.fillStyle = '#4a3c30';
+			for (let i = 0; i < 18; i++) {
+				g.beginPath();
+				g.arc(w * ((i * 0.618) % 1), h * ((i * 0.381) % 1), 3 + (i % 3) * 2, 0, Math.PI * 2);
+				g.fill();
+			}
+			// Cracks in the char, still glowing.
+			g.strokeStyle = 'rgba(200, 80, 24, 0.8)';
+			g.lineWidth = 1;
+			slashes(g, w, h, 5, -0.7);
+		},
+	},
+};
+
+const troutSkins = new Map<string, THREE.CanvasTexture>();
+
+/** `meshID`'s skin picture, drawn once and shared. */
+function troutSkin(meshID:string):THREE.CanvasTexture {
+	let tex = troutSkins.get(meshID);
+	if (!tex) {
+		const canvas = document.createElement('canvas');
+		canvas.width = 128;
+		canvas.height = 64;
+		TROUT_LOOKS[meshID]!.skin(canvas.getContext('2d')!, canvas.width, canvas.height);
+		tex = new THREE.CanvasTexture(canvas);
+		tex.colorSpace = THREE.SRGBColorSpace;
+		tex.userData.shared = true;
+		troutSkins.set(meshID, tex);
+	}
+	return tex;
+}
+
+/**
+ * A trout lying on its side, nose to +X: an oval body, a fanned tail and an eye. Raw, cooked and burnt share the
+ * shape and differ in skin. Skewered on a spit it lies the same way, along it.
+ */
+function trout(meshID:string):THREE.Group {
+	const look = TROUT_LOOKS[meshID]!;
+	// The sphere's poles turned to nose and tail, so its picture wraps round the girth.
+	const skin = toon(0xffffff, { map: troutSkin(meshID) });
+	const body = new THREE.Mesh(new THREE.SphereGeometry(1, 18, 10).rotateZ(-Math.PI / 2).scale(0.13, 0.035, 0.05), skin);
+	const finMat = toon(look.fin, { side: THREE.DoubleSide });
+	const fan = new THREE.Shape([new THREE.Vector2(0, 0), new THREE.Vector2(-0.075, 0.048), new THREE.Vector2(-0.058, 0), new THREE.Vector2(-0.075, -0.048)]);
+	const tail = new THREE.Mesh(new THREE.ShapeGeometry(fan).rotateX(-Math.PI / 2).translate(-0.115, 0, 0), finMat);
+	const eyeMat = toon(0x101418, { outline: false });
+	const eye = new THREE.Mesh(new THREE.SphereGeometry(0.009, 6, 4).translate(0.095, 0.022, 0.01), eyeMat);
+	const parts = new THREE.Group();
+	parts.name = 'body';
+	parts.position.y = 0.035;
+	for (const part of [body, tail, eye]) {
+		part.castShadow = true;
+		part.userData.lockColor = true;
+		parts.add(part);
+	}
+	const g = new THREE.Group();
+	g.userData.kind = 'item';
+	g.add(parts);
+	g.userData.body = parts;
+	g.userData.shine = [skin, finMat, eyeMat];
+	return g;
+}
+
 function itemProp(meshID:string):THREE.Group {
 	const h = ITEM_HEIGHT[meshID] ?? 0.36;
 	if (meshID === 'item_mushroom') {
 		return fireMushroom();
+	}
+	if (meshID in TROUT_LOOKS) {
+		return trout(meshID);
 	}
 	const ware = goodsMesh(meshID);
 	if (ware) {

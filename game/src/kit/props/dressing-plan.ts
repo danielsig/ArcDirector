@@ -50,6 +50,8 @@ export const PROP_IDS = [
 	'creel',
 	'oars',
 	'net',
+	'leanTo',
+	'bedroll',
 ] as const;
 
 export type PropID = (typeof PROP_IDS)[number];
@@ -94,6 +96,8 @@ export const DRESSING_SIGHT_WORDS = [
 	'Creel',
 	'Oars',
 	'Net',
+	'LeanTo',
+	'Bedroll',
 ] as const;
 
 /** Backward tilt, in radians. Lifts the handle top back toward a wall behind the broom. */
@@ -138,6 +142,9 @@ export const PROP_FOOTPRINT:Record<PropID, { w:number; d:number; round?:boolean 
 	creel: { w: 0.4, d: 0.4, round: true },
 	oars: null,
 	net: { w: 1.1, d: 0.5 },
+	// Too low to stand under: a bedroll under it is got into from its open front.
+	leanTo: { w: 1.95, d: 1.2 },
+	bedroll: null,
 };
 
 /** Props fixed to a wall, by depth: a map glyph puts its back flat on the nearest wall (`onWall`), facing out. */

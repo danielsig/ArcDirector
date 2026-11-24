@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { lathe, ToonMaterial, tube } from '@arc-director/kindling';
+import { hash, lathe, ToonMaterial, tube } from '@arc-director/kindling';
+import type { ChunkEntity } from '../../world/demo-chunk';
 import { Named } from '../../engine/components';
 import { windSway } from '../../render/nature';
 import { spawnProp, type Thing } from '../thing';
@@ -204,13 +205,25 @@ function pineTier(y:number, height:number, radius:number, turn:number, t:number)
 	return geo;
 }
 
-function pineCanopy(seed:number):THREE.BufferGeometry {
+/**
+ * A grown pine's tiers of branches and a sapling's, more as it grows (`treeParts`), and how far apart they stand (m)
+ * above the first.
+ */
+const PINE_TIERS = { grown: 5, sapling: 3 };
+const TIER_STEP = 0.58;
+const FIRST_TIER = 0.75;
+
+/**
+ * A pine's crown of `tiers` tiers of branches, wide at the foot and narrowing to the top. Only a full-grown one comes to
+ * a point: a younger one's top tier is as a grown one's second.
+ */
+function pineCanopy(seed:number, tiers:number):THREE.BufferGeometry {
 	const rnd = rand(seed + 11);
-	const tiers = 5;
 	const parts:THREE.BufferGeometry[] = [];
+	const highest = tiers === PINE_TIERS.grown ? 1 : (PINE_TIERS.grown - 2) / (PINE_TIERS.grown - 1);
 	for (let i = 0; i < tiers; i++) {
-		const t = i / (tiers - 1);
-		const y = 0.75 + i * 0.58;
+		const t = (i / (tiers - 1)) * highest;
+		const y = FIRST_TIER + i * TIER_STEP;
 		parts.push(pineTier(y, 0.95 - t * 0.25, 1.0 - t * 0.68, rnd() * Math.PI, t));
 	}
 	const merged = mergeGeometries(parts)!;
@@ -218,18 +231,26 @@ function pineCanopy(seed:number):THREE.BufferGeometry {
 	return merged;
 }
 
-function pineTrunk():THREE.BufferGeometry {
+/** A pine's trunk, up to the top of `tiers` tiers. */
+function pineTrunk(tiers:number):THREE.BufferGeometry {
+	const top = FIRST_TIER + (tiers - 1) * TIER_STEP + 0.13;
 	return bare(lathe([
 		{ r: 0.14, y: 0 },
 		{ r: 0.09, y: 0.12 },
-		{ r: 0.06, y: 1.6 },
-		{ r: 0.02, y: 3.2 },
+		{ r: 0.06, y: top / 2 },
+		{ r: 0.02, y: top },
 	], 6));
 }
 
-let built:{ oak:TreePart[][]; pine:TreePart[][]; farCrowns:TreePart[] } | null = null;
+/** Oaks by variant; pines by tier count, then variant. */
+interface Built {
+	oak:TreePart[][];
+	pine:TreePart[][][];
+	farCrowns:TreePart[];
+}
+let built:Built | null = null;
 
-function build():{ oak:TreePart[][]; pine:TreePart[][]; farCrowns:TreePart[] } {
+function build():Built {
 	const bark = new ToonMaterial({ color: BARK, rim: 0.1 });
 	windSway(bark, 0.01);
 	const leaves = new ToonMaterial({
@@ -240,24 +261,38 @@ function build():{ oak:TreePart[][]; pine:TreePart[][]; farCrowns:TreePart[] } {
 	});
 	windSway(leaves, 0.01);
 	const oak:TreePart[][] = [];
-	const pine:TreePart[][] = [];
 	for (let v = 0; v < TREE_VARIANTS; v++) {
 		oak.push([{ geom: oakTrunk(v + 1), mat: bark }, { geom: oakCanopy(v + 1), mat: leaves }]);
-		pine.push([{ geom: v === 0 ? pineTrunk() : pine[0]![0]!.geom, mat: bark }, { geom: pineCanopy(v + 1), mat: leaves }]);
+	}
+	const pine:TreePart[][][] = [];
+	for (let tiers = PINE_TIERS.sapling; tiers <= PINE_TIERS.grown; tiers++) {
+		const trunk = pineTrunk(tiers);
+		pine[tiers] = Array.from({ length: TREE_VARIANTS }, (unused, v) => [{ geom: trunk, mat: bark }, { geom: pineCanopy(v + 1, tiers), mat: leaves }]);
 	}
 	const farCrowns = oak.map((parts, v) => ({ geom: oakCanopy(v + 1, 1), mat: leaves }));
-	for (const { geom, mat } of [...oak.flat(), ...pine.flat(), ...farCrowns]) {
+	for (const { geom, mat } of [...oak.flat(), ...pine.flat(2), ...farCrowns]) {
 		geom.userData.shared = true;
 		mat.userData.shared = true;
 	}
 	return { oak, pine, farCrowns };
 }
 
-/** Parts of one tree. Shared geometry and materials: instance them, never tint or dispose. */
-export function treeParts(kind:TreeKind, variant:number):TreePart[] {
+/**
+ * Parts of one tree, `age` 0 a sapling to 1 full grown: a younger pine has fewer tiers. Shared geometry and materials: instance them, never tint or dispose.
+ */
+export function treeParts(kind:TreeKind, variant:number, age = 1):TreePart[] {
 	built ??= build();
-	const set = built[kind];
+	const set = kind === 'oak' ? built.oak : built.pine[Math.round(THREE.MathUtils.lerp(PINE_TIERS.sapling, PINE_TIERS.grown, age))]!;
 	return set[((variant % set.length) + set.length) % set.length]!;
+}
+
+/** A sapling's width and height against a full-grown tree's: slender sooner than short, a pine shorter for its fewer tiers too. */
+const SAPLING:Record<TreeKind, { wide:number; tall:number }> = { oak: { wide: 0.25, tall: 0.45 }, pine: { wide: 0.35, tall: 0.5 } };
+
+/** How wide and tall a tree of `age` (0 a sapling, 1 full grown) is drawn, against a full-grown one of its kind. */
+export function treeGrowth(kind:TreeKind, age:number):{ wide:number; tall:number } {
+	const sapling = SAPLING[kind];
+	return { wide: THREE.MathUtils.lerp(sapling.wide, 1, age), tall: THREE.MathUtils.lerp(sapling.tall, 1, age) };
 }
 
 /** An oak crown at a quarter of the triangles, for packed woods seen only from afar. Shared, like `treeParts`. */
@@ -267,6 +302,15 @@ export function farCrown(variant:number):TreePart {
 	return set[((variant % set.length) + set.length) % set.length]!;
 }
 
+/**
+ * What tree `ent` is: an oak on every other cell, a pine on the rest, as many as its legend's `pines` share (0.5, all
+ * of them, when unset); the others are oaks too. `center` is its cell's middle.
+ */
+export function treeKind(ent:ChunkEntity, center:{ x:number; z:number }):TreeKind {
+	const pineCell = (ent.localX + ent.localZ) % 2 !== 0;
+	return pineCell && hash(center.x, center.z, 15) < (ent.pines ?? 0.5) * 2 ? 'pine' : 'oak';
+}
+
 /** A tree's trunk, over the eyes: it hides what is right behind it, and one sees between trees. Its cell stays blocked to bodies. */
 const TRUNK = { across: 0.3, tall: 3 };
 
@@ -274,7 +318,7 @@ const TRUNK = { across: 0.3, tall: 3 };
 export const tree:Thing = {
 	defs: ['tree'],
 	spawn: (world, chunk, ents) => ents.forEach((ent) => {
-		const go = spawnProp(chunk, ent, (ent.localX + ent.localZ) % 2 === 0 ? 'tree_oak' : 'tree_pine', TRUNK.across, undefined, TRUNK.tall);
+		const go = spawnProp(chunk, ent, `tree_${treeKind(ent, chunk.worldCellCenter(ent.localX, ent.localZ))}`, TRUNK.across, undefined, TRUNK.tall);
 		if (!ent.name) {
 			go.addComponent(Named, { id: go.id });
 		}

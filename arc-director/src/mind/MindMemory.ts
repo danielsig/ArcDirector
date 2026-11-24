@@ -7,7 +7,7 @@ import { hand, internalsOf } from '../internals.js';
 import { ago, nothingRecalled } from './prompt.js';
 import type { Mind, MindJSON } from './mind.js';
 import type { HeldEvent, HeldTurn, Manner, TurnDraft } from './mind-types.js';
-import type { FeelingLevels, Mood } from '../character/feeling.js';
+import { feelingsIn, type FeelingLevels, type Mood } from '../character/feeling.js';
 import { centroid, dot, sub, unit } from '../world/vec.js';
 import type { Vec } from '../world/world-types.js';
 import { showInPerson, writerToID } from '../character/person.js';
@@ -207,7 +207,7 @@ const CARES_FULL = 0.65;
 
 /** How much more readily a memory naming each one comes to mind, by id: 1 plus what it feels toward them (`toward`), summed. */
 function bondsOf(toward:ReadonlyMap<string, FeelingLevels>):Record<string, number> {
-	return Object.fromEntries([...toward].map(([id, levels]) => [id, 1 + Object.values(levels).reduce((sum, level) => sum + level, 0)]));
+	return Object.fromEntries([...toward].map(([id, levels]) => [id, 1 + feelingsIn(levels).reduce((sum, [, level]) => sum + level, 0)]));
 }
 
 /** How memories lean toward a mind's mood and what it cares about: what tints what comes to mind, and what it stirs. */
@@ -314,9 +314,9 @@ export class MindMemory<TCtx = unknown> {
 		];
 	}
 
-	/** Its persona's pinned memories, in its names. */
+	/** Its persona's pinned memories and its voice's own (a commander's, who speaks for its collective), in its names. */
 	public pinned():ShownMemory[] {
-		return this._mind.persona.memory.pinned().map((r) => ({ ...r, text: this.recordText(r) }));
+		return this._mind.persona.memory.pinned(this._hooks.ownKnowers()).map((r) => ({ ...r, text: this.recordText(r) }));
 	}
 
 	/** What its sight showed this think, by id, and what else the look found ({@link Sighted}). */
@@ -624,7 +624,7 @@ export class MindMemory<TCtx = unknown> {
 		const conversation = this.conversationLines();
 		const query = this.recallQuery(about);
 		const recent = this._recent.map((line) => this.shown(line.text));
-		const pins = persona.memory.pinned();
+		const pins = persona.memory.pinned(this._hooks.ownKnowers());
 		// A pinned memory is in every prompt: each one a use, so once its pin runs out it fades from then on.
 		persona.memory.used(pins, this.now);
 		const pinnedIds = new Set(pins.map((r) => r.id));
@@ -710,7 +710,7 @@ export class MindMemory<TCtx = unknown> {
 	 */
 	private voices<T extends { id:string }>(members:readonly T[]):T[] {
 		const random = seeded(Math.round(this.now * 1000));
-		const strength = (member:T):number => Math.hypot(...Object.values(this._hooks.moodOf(member.id)?.levels ?? {}));
+		const strength = (member:T):number => Math.hypot(...feelingsIn(this._hooks.moodOf(member.id)?.levels).map(([, level]) => level));
 		const left = [...members];
 		const picked:T[] = [];
 		for (const score of [strength, (member:T):number => strength(member) * (0.5 + random()), ():number => random()]) {
@@ -734,7 +734,7 @@ export class MindMemory<TCtx = unknown> {
 		const interests = this._mind.voice.persona.interests;
 		// Its characters' interests too: each of a collective's tints what it brings to mind ({@link intrude}).
 		const allInterests = [...interests, ...(this._mind.owner.characters ?? []).flatMap((c) => c.persona.interests)];
-		const [seen = {}, recalled = {}] = await this.meaning(this.query(perceptionText), this.recallQuery(about), ...mood ? Object.values(mood.memories).flat() : [], ...allInterests);
+		const [seen = {}, recalled = {}] = await this.meaning(this.query(perceptionText), this.recallQuery(about), ...feelingsIn(mood?.memories).flatMap(([, memories]) => memories), ...allInterests);
 		const toward = this._mind.persona.memory.feelingsToward(this.now, this._mind.thinkThread());
 		return { seen, recalled, lens: this.lens(mood, interests, toward) };
 	}
@@ -772,9 +772,9 @@ export class MindMemory<TCtx = unknown> {
 	 *   readily, in recall too: a loved one's memories, and a hated one's.
 	 */
 	private lens(mood:Mood | undefined, interests:readonly string[], toward:ReadonlyMap<string, FeelingLevels>, voice = this._mind.thinkThread()):MemoryLens {
-		const feelings = Object.keys(mood?.memories ?? {});
-		const axes = feelings.flatMap((feeling) => {
-			const along = this.axis(mood!.memories[feeling], feelings.filter((other) => other !== feeling).map((other) => mood!.memories[other]));
+		const sets = feelingsIn(mood?.memories);
+		const axes = sets.flatMap(([feeling, memories]) => {
+			const along = this.axis(memories, sets.filter(([other]) => other !== feeling).map(([, others]) => others));
 			return along ? [[feeling, along] as const] : [];
 		});
 		const cares = this.axis(interests, []);
@@ -783,13 +783,13 @@ export class MindMemory<TCtx = unknown> {
 		return {
 			boost: (record) => {
 				const lean = leans(record);
-				const moved = Object.entries(mood?.levels ?? {}).reduce((sum, [feeling, level]) => sum + level * (lean[feeling] ?? 0), 0);
+				const moved = feelingsIn(mood?.levels).reduce((sum, [feeling, level]) => sum + level * (lean[feeling] ?? 0), 0);
 				const cared = cares && record.embedding ? Math.min(1, Math.max(0, (cares(record.embedding) - CARES_FROM) / (CARES_FULL - CARES_FROM))) : 0;
 				return Math.max(0, 1 + moved) * (1 + cared);
 			},
 			stirs: (record) => {
 				const by = STIR * (record.weight ?? 1);
-				const stirred = (levels:FeelingLevels, felt:boolean):FeelingLevels => Object.fromEntries(Object.entries(levels).filter(([, lean]) => lean > 0)
+				const stirred = (levels:FeelingLevels, felt:boolean):FeelingLevels => Object.fromEntries(feelingsIn(levels).filter(([, lean]) => lean > 0)
 					.map(([feeling, lean]) => [feeling, Math.min(1, (felt ? Math.min(1, lean) : Math.min(1, lean) ** 2) * by)]));
 				return new Map(record.knownBy.filter((id) => this._hooks.controls(id)).map((id) => {
 					const felt = record.felt?.[id];

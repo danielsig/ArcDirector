@@ -4,7 +4,7 @@ import { hand, internalsOf } from '../internals.js';
 import { writerToID } from '../character/person.js';
 import type { JsonValue } from '../json.js';
 import type { Vec } from '../world/world-types.js';
-import type { FeelingLevels } from '../character/feeling.js';
+import { feelingsIn, type FeelingLevels } from '../character/feeling.js';
 
 export type MemoryCategory = 'episodic' | 'semantic' | 'identity';
 
@@ -264,7 +264,7 @@ const FELT = 0.2;
 
 /** `levels` of at least {@link FELT}, to two places; none when none is. */
 function strongOf(levels:FeelingLevels | undefined):FeelingLevels | undefined {
-	const strong = Object.entries(levels ?? {}).filter(([, level]) => level >= FELT).map(([feeling, level]) => [feeling, Math.round(level * 100) / 100] as const);
+	const strong = feelingsIn(levels).filter(([, level]) => level >= FELT).map(([feeling, level]) => [feeling, Math.round(level * 100) / 100] as const);
 	return strong.length > 0 ? Object.fromEntries(strong) : undefined;
 }
 const DAY = 86_400;
@@ -619,14 +619,17 @@ export class MemoryStore {
 		return internalsOf(this._pool).records().filter((r) => this.knows(r, holders));
 	}
 
-	/** Its owner's pinned memories: a collective pins its own, never its characters'. */
-	public pinned():MemoryRecord[] {
-		return this.all().filter((r) => r.pinned && r.knownBy.includes(this.owner));
+	/**
+	 * The pinned memories of `of`, its owner by default: a collective pins its own, never its characters', and its mind
+	 * adds its commander's own, whose voice it speaks with.
+	 */
+	public pinned(of:readonly string[] = [this.owner]):MemoryRecord[] {
+		return this.all().filter((r) => r.pinned && r.knownBy.some((id) => of.includes(id)));
 	}
 
-	/** A think read the pins: those pinned for some thinks count down, and any run out become plain memories. */
-	public agePins():void {
-		for (const record of this.pinned()) {
+	/** A think read the pins of `of`: those pinned for some thinks count down, and any run out become plain memories. */
+	public agePins(of?:readonly string[]):void {
+		for (const record of this.pinned(of)) {
 			if (record.pinnedThinks !== undefined && --record.pinnedThinks <= 0) {
 				record.pinned = false;
 				record.pinnedThinks = undefined;
@@ -739,7 +742,7 @@ export class MemoryStore {
 			for (const id of new Set(idsIn(keptText(record)).filter((id) => id !== holder))) {
 				const sum = sums.get(id) ?? { counted: 0, levels: {} };
 				sum.counted += counts;
-				for (const [feeling, level] of Object.entries(felt)) {
+				for (const [feeling, level] of feelingsIn(felt)) {
 					sum.levels[feeling] = (sum.levels[feeling] ?? 0) + counts * level;
 				}
 				sums.set(id, sum);

@@ -10,7 +10,7 @@ import { instantiateDef } from '../items/instance';
 import { tryInsert } from '../items/inventory';
 import { dropItem } from '../items/pickup';
 import { canStand, cellWays } from '../world/path';
-import { Furniture } from '../kit/furniture/furniture';
+import { Furniture, MATTRESS } from '../kit/furniture/furniture';
 import type { Sense } from '../kit/thing';
 import { TERRAIN } from '../world/terrain-kinds';
 
@@ -18,6 +18,9 @@ import { TERRAIN } from '../world/terrain-kinds';
 const HIP_SEAT = 0.65;
 const HIP_EDGE = 0.57;
 const HIP_AHEAD = 0.1;
+/** A bed no higher than this (m) is sat on with the legs out straight, the feet this far ahead (m). */
+const LOW_BED = 0.2;
+const LEGS_OUT = 0.95;
 /** Seconds to get settled, and to get up; a bed takes this twice, once for its edge and once for lying down. */
 const SETTLE_SECONDS = 0.8;
 /** How far to the side a body steps to get up out of a chair, and out of a bed. */
@@ -94,7 +97,7 @@ export function approachSpot(seat:GameObject, body:GameObject):XZ | undefined {
 	const spots = furniture.places > 1 ? [spotBehind(seat, furniture.placeAt(Math.max(0, furniture.placeFor(body))))] : [...spotsBeside(seat, side, body), ...spotsBeside(seat, -side, body)];
 	return spots.find((spot) => {
 		const route = findRoute(cellWays(world), body, [p.x, p.z], pointGoal([spot.x, spot.z]));
-		return !!route && 'points' in route;
+		return 'points' in route;
 	});
 }
 
@@ -246,8 +249,10 @@ export class Seated extends Component {
 		model.position.set(0, 0, 0);
 		model.quaternion.identity();
 		if (bed) {
-			this.poseSitting(model, this.edge(seat), HIP_EDGE, THREE.MathUtils.smoothstep(this._sit, 0, 0.5));
-			this.poseLying(model, seat, THREE.MathUtils.smoothstep(this._sit, 0.5, 1));
+			// Every height in a bed is for a mattress at `MATTRESS`: a lower one lowers them all.
+			const sink = MATTRESS - furniture.top;
+			this.poseSitting(model, this.edge(seat), HIP_EDGE - sink, THREE.MathUtils.smoothstep(this._sit, 0, 0.5), furniture.top <= LOW_BED);
+			this.poseLying(model, seat, THREE.MathUtils.smoothstep(this._sit, 0.5, 1), sink);
 		}
 		else {
 			this.poseSitting(model, furniture.placeAt(this.place), HIP_SEAT, THREE.MathUtils.smoothstep(this._sit, 0, 1));
@@ -363,8 +368,8 @@ export class Seated extends Component {
 		go.world?.caught(go, 'SilverTrout');
 	}
 
-	/** Sat with its hip joints `hipHeight` over the floor at `s`, the seat's middle. */
-	private poseSitting(root:THREE.Object3D, s:XZ, hipHeight:number, w:number):void {
+	/** Sat with its hip joints `hipHeight` over the floor at `s`, the seat's middle: on the ground with `legsOut` straight. */
+	private poseSitting(root:THREE.Object3D, s:XZ, hipHeight:number, w:number, legsOut = false):void {
 		const go = this.gameObject;
 		const p = go.transform.position;
 		const f = yawToForward(go.transform.yaw);
@@ -388,7 +393,7 @@ export class Seated extends Component {
 			}
 		}
 		for (const hand of [-1, 1] as const) {
-			const foot = new THREE.Vector3(p.x, p.y + 0.14, p.z).addScaledVector(ahead, 0.5).addScaledVector(side, hand * 0.13);
+			const foot = new THREE.Vector3(p.x, p.y + (legsOut ? 0.06 : 0.14), p.z).addScaledVector(ahead, legsOut ? LEGS_OUT : 0.5).addScaledVector(side, hand * 0.13);
 			placeFoot(root, hand < 0 ? 'left' : 'right', foot, w, ahead);
 			restFoot(root, hand < 0 ? 'left' : 'right', w);
 		}
@@ -413,9 +418,10 @@ export class Seated extends Component {
 
 	/**
 	 * From sitting on the edge, tipped over sideways onto the mattress, still facing the way it sat: its head on the
-	 * pillow, its back curled, knees drawn up ahead of it (a bed is shorter than a body) and hands by its chest.
+	 * pillow, its back curled, knees drawn up ahead of it (a bed is shorter than a body) and hands by its chest. All
+	 * of it `sink` m lower than on a mattress at `MATTRESS`.
 	 */
-	private poseLying(root:THREE.Object3D, seat:GameObject, w:number):void {
+	private poseLying(root:THREE.Object3D, seat:GameObject, w:number, sink:number):void {
 		const parent = root.parent;
 		const neck = humanBone(root, 'neck');
 		const hips = humanBone(root, 'hips');
@@ -427,7 +433,7 @@ export class Seated extends Component {
 		const y = go.transform.position.y;
 		const s = seat.transform.position;
 		const f = yawToForward(seat.transform.yaw);
-		const along = (meters:number, height:number):THREE.Vector3 => new THREE.Vector3(s.x + f.x * meters, y + height, s.z + f.z * meters);
+		const along = (meters:number, height:number):THREE.Vector3 => new THREE.Vector3(s.x + f.x * meters, y + height - sink, s.z + f.z * meters);
 		const tip = (share:number):THREE.Vector3 => {
 			root.quaternion.setFromAxisAngle(LENGTHWISE, this.side * share * Math.PI / 2);
 			root.updateMatrixWorld(true);

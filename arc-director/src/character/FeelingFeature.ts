@@ -9,7 +9,7 @@ import type { Mind } from '../mind/mind.js';
 import { isRecord, type JsonValue } from '../json.js';
 import type { SeenObject } from '../perception/perception-types.js';
 import type { Manner } from '../mind/mind-types.js';
-import { FEELINGS, type Feeling, type FeelingDef, type FeelingLevels, type Mood } from './feeling.js';
+import { FEELINGS, feelingsIn, type Feeling, type FeelingDef, type FeelingLevels, type FeelingMap, type Mood } from './feeling.js';
 
 /** Game seconds a feeling shows before it fades, by default. */
 const FEELING_SECONDS = 120;
@@ -33,7 +33,7 @@ export interface FeelingCase<TCtx = unknown> {
 /** What `withFeelings` takes. */
 export interface FeelingsOptions<TCtx = unknown> {
 	/** Every feeling there is, by name. Replaces the stock ones ({@link FEELINGS}), so a game names only those it can show. */
-	feelings?:Readonly<Record<string, FeelingDef>>;
+	feelings?:FeelingMap<FeelingDef>;
 	/** Game seconds a feeling shows before it fades. Default 120. */
 	seconds?:number;
 	/** Each feeling a character starts to show, for its face, body and sound, and `undefined` once it fades. Adds a listener. */
@@ -46,8 +46,8 @@ export interface FeelingsOptions<TCtx = unknown> {
 	 */
 	when?:(started:FeelingCase<TCtx>, feeling:Feeling)=>Feeling | undefined;
 	/**
-	 * What a mind reads first of all while its character shows `feeling`: by default {@link feelLine} (`You feel sad: say any
-	 * line in that mood, and do as you would anyway.`), or `undefined` for nothing, so a game can word it or spare a mind it.
+	 * What a mind reads first of all while its character shows `feeling`: by default {@link feelLine}, or `undefined` for
+	 * nothing, so a game can word it or spare a mind it.
 	 */
 	feel?:(id:string, feeling:Feeling)=>string | undefined;
 	/**
@@ -59,13 +59,15 @@ export interface FeelingsOptions<TCtx = unknown> {
 }
 
 /**
- * What a mind reads of the feeling its character shows, by default: the feeling goes into what it says, not into what it
- * does. Trialed on a 12B model, sad, against `let it show in your words and voice` (lines sad as often, but trades and
- * deeds dropped for an extra line): a trade made right 9 in 9 with a sad line each, a toll asked sadly 8 in 8, a thief
- * still chased 7 in 8. `You feel sad.` alone colored 1 line in 48.
+ * What a mind reads of the feeling its character shows, by default: the feeling colors what it would say, not what it
+ * does. Trialed on a 12B model. `let it show in your words and voice` colored as many lines, but trades and deeds dropped
+ * for an extra line. `say any line in that mood` cost answers: asked a question, stressed or sad, a mind answered from
+ * what it knew 11 times in 40, against 21 with this line and 20 in 20 with no feeling; the other answers were vague words
+ * of the mood. Sad, with either line a mind asked a toll 10 in 10, chased a thief 10 in 10 and made a trade right 5 in
+ * 10, every line sad. `You feel sad.` alone colored 1 line in 48.
  */
 export function feelLine(id:string, feeling:Feeling):string {
-	return `You feel ${feeling}: say any line in that mood, and do as you would anyway.`;
+	return `You feel ${feeling}: say what you would say in that mood, and do as you would anyway.`;
 }
 
 /**
@@ -78,7 +80,7 @@ export function feelLine(id:string, feeling:Feeling):string {
  */
 export class FeelingFeature<TCtx = unknown> extends Feature<TCtx> {
 	private readonly _options:FeelingsOptions<TCtx> = {};
-	private _feelings = new Map<string, FeelingDef>(Object.entries(FEELINGS));
+	private _feelings = new Map<Feeling, FeelingDef>(feelingsIn(FEELINGS));
 	private readonly _onFeeling:((id:string, feeling:Feeling | undefined)=>void)[] = [];
 	/** What each character was stirred to, by feeling, in the order stirred, each fading as it is read. */
 	private readonly _felt = new Map<string, Map<Feeling, Felt>>();
@@ -96,7 +98,7 @@ export class FeelingFeature<TCtx = unknown> extends Feature<TCtx> {
 			this._onFeeling.push(onFeeling);
 		}
 		if (feelings) {
-			this._feelings = new Map(Object.entries(feelings));
+			this._feelings = new Map(feelingsIn(feelings));
 			if (this.attached) {
 				this.verbsChanged();
 			}
@@ -150,7 +152,7 @@ export class FeelingFeature<TCtx = unknown> extends Feature<TCtx> {
 		if (!this.hasFeelings(id)) {
 			return;
 		}
-		for (const [feeling, amount] of Object.entries(levels)) {
+		for (const [feeling, amount] of feelingsIn(levels)) {
 			if (this._feelings.has(feeling) && amount > 0) {
 				this.set(id, feeling, Math.min(1, this.levelOf(id, feeling) + amount * this.temper(id, feeling)), seconds);
 			}
@@ -187,7 +189,7 @@ export class FeelingFeature<TCtx = unknown> extends Feature<TCtx> {
 		const toward = character.persona.memory.feelingsToward(now, id);
 		const targets:Record<string, number> = {};
 		for (const [other, weight] of arrived) {
-			for (const [feeling, level] of Object.entries(toward.get(other) ?? {})) {
+			for (const [feeling, level] of feelingsIn(toward.get(other))) {
 				targets[feeling] = Math.max(targets[feeling] ?? 0, Math.min(1, level * weight * this.temper(id, feeling)));
 			}
 		}

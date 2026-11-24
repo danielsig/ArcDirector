@@ -19,12 +19,17 @@ export class Bookshelf extends Chest {
 	}
 }
 
+/** How high a bed's mattress is (m), unless it says otherwise (`Furniture.top`). */
+export const MATTRESS = 0.39;
+
 /**
  * Something to rest on: a `chair` to sit on or a `bed` to sleep in, one body at a time; or a bench, a chair with
  * `places` side by side across its `width` (meters).
  */
 export class Furniture extends Component {
 	public kind:'chair' | 'bed' = 'chair';
+	/** How high a bed's mattress is (m): a bedroll on the ground is low enough to sit on with the legs out straight. */
+	public top = MATTRESS;
 	public places = 1;
 	public width = 0;
 	/** Who rests on each of its places; a free one is null. */
@@ -75,6 +80,7 @@ export function occupantNames(seat:GameObject):string[] {
 const USABLE:Partial<Record<string, { word:string; fit:(go:GameObject)=>void }>> = {
 	chair: { word: 'Chair', fit: (go) => go.addComponent(Furniture, { kind: 'chair' }) },
 	bed: { word: 'Bed', fit: (go) => go.addComponent(Furniture, { kind: 'bed' }) },
+	bedroll: { word: 'Bedroll', fit: (go) => go.addComponent(Furniture, { kind: 'bed', top: 0.05 }) },
 	bookshelf: {
 		word: 'Bookshelf',
 		fit: (go) => {

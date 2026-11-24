@@ -37,12 +37,23 @@ function isDrink(item:ItemInstance):boolean {
 	return item.Consumable?.effect === 'heal';
 }
 
-/** Whether `item` is something to eat. */
-export function isFood(item:ItemInstance):boolean {
-	return !!item.Consumable && !isDrink(item);
+/** What a fire makes of `item`, and how soon (`Campfire`), if it cooks. */
+export function cookingOf(item:ItemInstance):{ into:string; seconds:number } | undefined {
+	return getDef(item.defID).components.Cookable;
 }
 
-function consume(character:GameObject, item:ItemInstance):void {
+/** Whether `item` is food that must be cooked before it is eaten. */
+export function isRaw(item:ItemInstance):boolean {
+	return !item.Consumable && !!cookingOf(item);
+}
+
+/** Whether `item` is something to eat, raw or ready. */
+export function isFood(item:ItemInstance):boolean {
+	return (!!item.Consumable && !isDrink(item)) || isRaw(item);
+}
+
+/** One of `item` used up: off its stack, and out of the bag or hand once the last is gone. */
+export function consume(character:GameObject, item:ItemInstance):void {
 	item.count -= 1;
 	if (item.count > 0) {
 		return;
@@ -107,6 +118,10 @@ export function useItem(character:GameObject, item:ItemInstance, target:GameObje
 		return ok(`you read: "${page}"`);
 	}
 
+	if (isRaw(item)) {
+		return fail('it is raw: cook it over a fire first');
+	}
+
 	// Food and a torch are for oneself when what they are aimed at takes nothing: eaten, or lit, at a counter too.
 	if (item.Consumable) {
 		const { effect, amount, consumeOnUse } = item.Consumable;
@@ -131,7 +146,7 @@ export function useItem(character:GameObject, item:ItemInstance, target:GameObje
 			return fail(err);
 		}
 		removeFromBags(character, item);
-		return ok('equipped');
+		return item.Torch ? useItem(character, item, null) : ok('equipped');
 	}
 
 	if (target && item.Weapon && (target.getComponent(Vitals) || target.getComponent(HumanBody))) {

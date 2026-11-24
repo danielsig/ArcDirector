@@ -117,13 +117,14 @@ export class PlayerInput extends Component {
 			}
 		}
 
-		const aimed = aimTarget(world, this.gameObject);
+		const weapon = this.heldWeapon();
+		const aimed = aimTarget(world, this.gameObject, !!weapon);
 		this.cursorName = aimed?.getComponent(Named)?.id ?? aimed?.name ?? '';
 
 		const seated = this.gameObject.getComponent(Seated);
 		const yielded = this.gameObject.getComponent(PlayerPilot)?.consumeYield() === true;
 		const tapped = input.pressed(TOUCH_TAP) && !yielded;
-		const interacted = (input.pressed('KeyE') || tapped) && this.interact(aimed, tapped);
+		const interacted = (input.pressed('KeyE') || tapped) && this.interact(aimTarget(world, this.gameObject), tapped);
 		const clicked = input.pressed('KeyF') || ((input.pressed(MOUSE_LEFT) || tapped) && !yielded && !interacted);
 		const fishingSeat = seated?.resting ? world.findByID(seated.seatID) : undefined;
 		if (input.pressed('KeyF') && seated && fishingSeat && !seated.asleep && overWater(fishingSeat)) {
@@ -132,7 +133,6 @@ export class PlayerInput extends Component {
 			return;
 		}
 		// A sword in hand: Shift holds the guard up; a click stabs on the move, slices standing, cleaves with Shift.
-		const weapon = this.heldWeapon();
 		const sword = weapon?.Blade ? weapon : null;
 		this.holdGuard(!!sword && shift && !clicked && Time.time >= this._readyAt);
 		if (!weapon?.Bow) {
@@ -147,7 +147,7 @@ export class PlayerInput extends Component {
 		else if (clicked) {
 			const item = this.activeItem();
 			if (item) {
-				this.act(`use(item=${itemID(item)}${aimed ? `, target=${idOf(aimed)}` : ''})`);
+				void this.act(`use(item=${itemID(item)}${aimed ? `, target=${idOf(aimed)}` : ''})`)?.then(() => this.selected = Math.max(0, this.hotbar().indexOf(item)));
 			}
 			else if (aimed?.getComponent(Door)) {
 				world.setMessage(interactDoor(this.gameObject, aimed));
@@ -174,10 +174,10 @@ export class PlayerInput extends Component {
 		}
 	}
 
-	/** Does `arc` as the player's own steps, by the rules every character keeps, and says what came of it. */
-	private act(arc:string):void {
+	/** Does `arc` as the player's own steps, by the rules every character keeps, and says what came of it; settles once said. */
+	private act(arc:string):Promise<void> | undefined {
 		const world = this.gameObject.world;
-		void world?.enact(arc).then((result) => world.setMessage(result.reason ?? result.status), (err:Error) => world.setMessage(err.message));
+		return world?.enact(arc).then((result) => world.setMessage(result.reason ?? result.status), (err:Error) => world.setMessage(err.message));
 	}
 
 	/**

@@ -103,7 +103,7 @@ export { Feature, type FeatureTick, type WatchKernels } from './director/Feature
 export { GoalsFeature, type GoalsOptions } from './character/GoalsFeature.js';
 export { FeelingFeature, feelLine, type FeelingCase, type FeelingsOptions } from './character/FeelingFeature.js';
 export { AcquaintanceFeature, type AcquaintanceOptions } from './character/AcquaintanceFeature.js';
-export { FEELINGS, Feeling, type FeelingDef, type FeelingLevels, type Mood } from './character/feeling.js';
+export { FEELINGS, Feeling, feelingsIn, type FeelingMap, type FeelingDef, type FeelingLevels, type Mood } from './character/feeling.js';
 export { RegionsFeature, type RegionShape } from './director/RegionsFeature.js';
 export { RequirementsFeature } from './director/RequirementsFeature.js';
 export { SightFeature, type SightOptions } from './perception/SightFeature.js';

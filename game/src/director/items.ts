@@ -150,6 +150,10 @@ export function transferRefusal(move:Transfer<GameObject>, deal?:Deal<GameObject
 	if (!stock || stock.count < count) {
 		return stock ? (name) => `${name(idOf(from))} has only ${stock.count} ${name(thing)}` : (name) => `${name(idOf(from))} has no ${name(thing)}`;
 	}
+	const unwanted = verb === 'drop' ? to?.getComponent(Chest)?.refuses(stock) : undefined;
+	if (unwanted) {
+		return unwanted;
+	}
 	// A whole stack leaving `to` in the same trade frees its slot first.
 	const room = !to || hasRoom(to, stock, count) || keepsAtFeet(from, to) || !!deal?.leaving(to).some((m) => !isGold(m.thing));
 	return room ? undefined : (name) => `${name(idOf(to))} has no room`;

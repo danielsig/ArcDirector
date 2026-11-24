@@ -98,14 +98,16 @@ const HURT_ENEMIES = 'others.filter(u => u is "enemy" && isHurt(u))';
 
 /**
  * A change of tactics in the units' own idiom, laid out as blocks: one program for the whole squad now (`attack` is
- * each unit's own blow) and a law for the next likely turn. Small models copy this; keep it short.
+ * each unit's own blow), with the three choices `choose` asks for, each target picked by its tag or by hp or distance,
+ * and a law for the next likely turn. Small models copy this word for word, holes in a goal too; keep it short and plain.
  */
 const FIGHT_EXAMPLE = `
 command(who=units, group=Vanguard) {
 	loop(until=!some(others.filter("enemy"))) {
-		choose("Kill their Healer first or finish off the weakest enemy. There are {X} friends and {Y} enemies left. Healer is {Z} units away. Weakest enemy is {W} units away.") {
-			healer: attack(EnemyHealer)
+		choose("Kill their Healer first, else the weakest enemy, else the nearest") {
+			healer: attack(others.filter("enemy").filter("Healer"))
 			finish: attack(others.filter("enemy").minBy(u => u.hp))
+			nearest: attack(others.filter("enemy").minBy(u => distance(me, u)))
 		}
 	}
 }
@@ -142,8 +144,8 @@ function partyStory(party:string, units:{ id:string; tags?:string[] }[]):MemoryD
 }
 
 /** How a captain sounds when it speaks: its own memory, in its own words, so what it says is never generic. */
-function voice(party:string, text:string):MemoryDraft {
-	return { text, tags: ['backstory', 'voice', party], pinned: true };
+function voice(text:string):MemoryDraft {
+	return { text, tags: ['backstory', 'voice'], pinned: true };
 }
 
 /** A party fights, and its captain leads out loud: it calls every order and answers whoever speaks to it. */
@@ -203,9 +205,14 @@ const CAST:SceneCast = [
 	fighter('Flint', 'Blade', 'VillagerMale', 39, 17, 20, SWORD),
 ];
 
-/** A party of the cast, led by its captain, who sounds as its `manner` says. */
+/**
+ * A party of the cast, led by its captain, who sounds as its `manner` says: the captain's own, since a party speaks as
+ * whoever commands it, so one who takes over after it falls speaks for itself.
+ */
 function party(id:string, traits:string[], manner:string):CollectiveSpec<CharacterCtx> {
-	const units = mindsOf(CAST, id);
+	const units = mindsOf(CAST, id).map((unit) => (unit.tags?.includes('Captain')
+		? { ...unit, identity: { role: 'Commander', traits }, memories: [...unit.memories ?? [], voice(manner)] }
+		: unit));
 	return {
 		id,
 		// Its commander plans when its watches say something changed; its units' System One picks each swing.
@@ -215,8 +222,7 @@ function party(id:string, traits:string[], manner:string):CollectiveSpec<Charact
 		pinnedSightFocus: ['isHurt(it)'],
 		kit: FIGHT,
 		commander: units.find((unit) => unit.tags?.includes('Captain'))!.id,
-		identity: { role: 'Commander', traits },
-		memories: [partyStory(id, units), voice(id, manner)],
+		memories: [partyStory(id, units)],
 		goals: PARTY_GOALS,
 		characters: units,
 	};

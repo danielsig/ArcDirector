@@ -1,13 +1,15 @@
-import { Time } from '@arc-director/kindling';
+import { Rigidbody, Time, type GameObject } from '@arc-director/kindling';
 import { formatArc, parseArc, showNamingText, type ArcResult } from 'arc-director';
 import { filterAiLog, type AiLogQuery, type AiLogRow, type CastRows, type CharacterRow, type Command, type ReconnectResult } from '@arc-director/control';
 import type { Session } from '../engine/Session';
 import { coercePrefsPatch, prefs, setPrefs } from '../prefs';
 import { PlayerPilot } from '../characters/PlayerPilot';
-import { findObject } from '../director/names';
+import { findObject, isLiving } from '../director/names';
 import { aiLogRow } from '../director/ai-log-sink';
 import { CameraFocus } from '../engine/CameraFocus';
-import { FollowCamera } from '../engine/components';
+import { FollowCamera, idOf } from '../engine/components';
+import { CharacterAnimation } from '../characters/CharacterAnimation';
+import { attackFor, wound } from '../director/fight';
 
 export async function dispatchControl(session:Session, command:Command):Promise<unknown> {
 	switch (command.op) {
@@ -43,6 +45,12 @@ export async function dispatchControl(session:Session, command:Command):Promise<
 		}
 		case 'setCamera':
 			return setCamera(session, command);
+		case 'kill':
+			return kill(session, command.character, command.by);
+		case 'teleport':
+			return teleport(session, command.character, command.x, command.z);
+		case 'scrub':
+			return scrub(session, command);
 		default:
 			throw new Error('unknown command');
 	}
@@ -67,6 +75,51 @@ function setCamera(session:Session, { focus, zoom, view }:Extract<Command, { op:
 		rig.distance = zoom;
 	}
 	return { focus: camera.expr, picks: camera.expr ? camera.picks() : [] };
+}
+
+/** The living thing `id` names in the session's world. */
+function living(session:Session, id:string):GameObject {
+	const go = findObject(session.director.world, id);
+	if (!isLiving(go)) {
+		throw new Error(`no living ${id}`);
+	}
+	return go;
+}
+
+/** `id` falls dead as a felling blow from `by` leaves it (no weakness halves it), its fall told to everyone who sees it. */
+function kill(session:Session, id:string, by = id):{ fallen:string } {
+	const target = living(session, id);
+	wound(findObject(session.director.world, by) ?? target, target, 'strike', Infinity);
+	return { fallen: idOf(target) };
+}
+
+/** Holds the game still `at` seconds after `character` starts `verb`'s move (or from now), or lets it run again. */
+function scrub(session:Session, { character, verb, target, windUp, at }:Extract<Command, { op:'scrub' }>):{ at:number | null } {
+	const go = findObject(session.director.world, character);
+	if (!go) {
+		throw new Error(`no ${character}`);
+	}
+	if (verb && at !== null) {
+		const aimed = target ? findObject(session.director.world, target) ?? undefined : undefined;
+		go.getComponent(CharacterAnimation)?.strike(verb, windUp ?? attackFor(verb, undefined).castTime, aimed);
+	}
+	session.scrub = at;
+	return { at };
+}
+
+/** `id` stands at `x`, `z`, on the ground there; what it was walking to it walks to from here. */
+function teleport(session:Session, id:string, x:number, z:number):{ at:[number, number] } {
+	const go = findObject(session.director.world, id);
+	if (!go) {
+		throw new Error(`no ${id}`);
+	}
+	const p = go.transform.position;
+	Object.assign(p, { x, z, y: go.world?.terrain.sample(x, z)?.worldY ?? p.y });
+	const rb = go.getComponent(Rigidbody);
+	if (rb) {
+		Object.assign(rb, { prevX: x, prevZ: z });
+	}
+	return { at: [x, z] };
 }
 
 /** Who thinks for `character`: its own mind (in a collective too), its collective's, or no one. */

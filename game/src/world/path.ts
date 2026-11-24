@@ -58,7 +58,7 @@ function walk(world:DemoWorld, body:GameObject, a:Cell, b:Cell):Passage | undefi
 		if (!barrier?.standsInWay) {
 			return undefined;
 		}
-		return barrier.opensFrom({ x: a[0], z: a[1] }) ? {} : { blocked: barrier.whyBlocked(body) };
+		return barrier.opensFrom(body, { x: a[0], z: a[1] }) ? {} : { blocked: barrier.whyBlocked(body) };
 	}
 	return characterIn(world, b.tx, b.tz, body) ? { weight: OCCUPANT_WEIGHT } : {};
 }

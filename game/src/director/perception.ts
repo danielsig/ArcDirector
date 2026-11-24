@@ -32,7 +32,7 @@ import { isLiving, nameList } from './names';
 import type { CharacterCtx } from './game-types';
 import type { GameHost } from './adapter';
 import { fightExprTags, fightProximityNote, fightRole } from './fight';
-import { isFood } from '../items/use';
+import { isFood, isRaw } from '../items/use';
 import { Bridge } from '../kit/bridge/bridge';
 import { sensesOf } from '../kit/thing';
 
@@ -80,7 +80,8 @@ function tagsNow(go:GameObject):string[] {
 	if (go.getComponent(Pickupable) || go.getComponent(Item)) {
 		tags.push('item');
 	}
-	if (go.getComponent(HumanBody)) {
+	// A body that has fallen is no character any more: a thing, nothing to pick up or deal with.
+	if (go.getComponent(HumanBody) && isLiving(go)) {
 		tags.push(RESERVED_TAGS.character);
 	}
 	if (go.getComponent(Wanted)?.enabled) {
@@ -221,9 +222,6 @@ export function lookWorld(character:GameObject, ambient:string, host?:GameHost):
 		if (go === character || go.id === 'MainCamera' || !talkNotices(character, go)) {
 			continue;
 		}
-		if (go.getComponent(HumanBody) && !isLiving(go)) {
-			continue;
-		}
 		// Only what has a name: unnamed dressing (a wall torch) would show by its internal id, and a model goes to it.
 		if (!go.getComponent(Named)) {
 			continue;
@@ -240,6 +238,10 @@ export function lookWorld(character:GameObject, ambient:string, host?:GameHost):
 		if (row.tags.includes('tree') || row.tags.includes('boulder') || row.tags.includes('pillar')) {
 			continue;
 		}
+		// A body is seen where it fell.
+		if (go.getComponent(HumanBody) && !isLiving(go)) {
+			row.note = 'dead';
+		}
 		const span = onSpan.get(go);
 		if (span) {
 			row.attachedTo = span;
@@ -253,7 +255,7 @@ export function lookWorld(character:GameObject, ambient:string, host?:GameHost):
 /** A carried item, with what its owner knows of it: `MoonMushroom (worth 1 gold, food)`. */
 function carriedLabel(item:ItemInstance):string {
 	const worth = worthOf(item.defID);
-	const notes = [worth !== undefined && `worth ${worth} gold${item.count > 1 ? ' each' : ''}`, isFood(item) && 'food'].filter(Boolean);
+	const notes = [worth !== undefined && `worth ${worth} gold${item.count > 1 ? ' each' : ''}`, isFood(item) && (isRaw(item) ? 'raw food' : 'food')].filter(Boolean);
 	return notes.length > 0 ? `${itemLabel(item)} (${notes.join(', ')})` : itemLabel(item);
 }
 

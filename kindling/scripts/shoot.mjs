@@ -5,6 +5,8 @@
 // WAIT=<seconds> shoots after that long instead of waiting for the "ready" title.
 // EVAL=<js> prints that expression's value from the page before the screenshot (for debugging).
 // FRAMES=<n> EVERY=<seconds> takes n screenshots that far apart instead of one, to <out>-0.png, <out>-1.png, …
+// EACH=<js> runs before each of those (awaited, `i` the frame's index) and prints its value: with the game's `scrub`
+//   command, `FRAMES=5 EACH='arcControl({ op: "scrub", character: "Player", verb: "slice", at: i * 0.2 })'` shoots a move frame by frame.
 // PROFILE=<seconds> records a CPU profile that long (after WAIT/EVAL) and prints the functions with the most self time.
 // Set CHROME to the browser binary when it is not in the usual Windows, macOS or Linux place.
 import { spawn } from 'node:child_process';
@@ -124,6 +126,10 @@ try {
 	for (let i = 0; i < Math.max(1, frames); i++) {
 		if (i > 0) {
 			await new Promise((r) => setTimeout(r, Number(process.env.EVERY ?? 0.5) * 1000));
+		}
+		if (process.env.EACH) {
+			const { result } = await send('Runtime.evaluate', { expression: `(async (i) => (${process.env.EACH}))(${i}).then(async (v) => (await new Promise((r) => setTimeout(r, 300)), v))`, awaitPromise: true, returnByValue: true }, sessionId);
+			console.log(`each ${i}:`, JSON.stringify(result.value ?? result.description));
 		}
 		const { data } = await send('Page.captureScreenshot', { format: 'png' }, sessionId);
 		const file = frames ? out.replace(/(\.png)?$/, `-${i}.png`) : out;

@@ -256,7 +256,7 @@ function pct(n:number):string {
 								<span class="name">Player</span>
 								<select
 									v-model="player"
-									title="Participant: NPCs notice you. Observer: they never do. Camera: no body at all, for screenshots"
+									title="Participant: NPCs notice you. Observer: they never do. Camera: no body at all, for screenshots. V cycles them in play"
 								>
 									<option value="participant">Participant</option>
 									<option value="observer">Observer</option>

@@ -63,9 +63,10 @@ export type PersonaSpec = {
 	/** How wide its look is, over the director's (`withSight({ fieldOfView })`); from the host's spec, never saved. */
 	fieldOfView?:SightField;
 	/**
-	 * Whom it knows from the start, and what of them, where who knows whom is the game's (`withAcquaintance`): by a
-	 * character's id, a collective's (its characters) or a tag; `true` for all of it. `{ Bram: true, Hooded: [Knows.Look] }`.
-	 * What it learns in play is saved with its names; this is from the host's spec, never saved.
+	 * Whom it knows from the start, and what of them: by a character's id, a collective's (its characters) or a tag; `true`
+	 * for all of it. `{ Bram: true, Hooded: [Knows.Look] }`. On top of what everyone knows (look and name by default, or
+	 * what `withAcquaintance`'s rules give), so old friends know each other's voices too. What it learns
+	 * in play is saved with its names; this is from the host's spec, never saved.
 	 */
 	knows?:Readonly<Record<string, readonly Knows[] | true>>;
 };

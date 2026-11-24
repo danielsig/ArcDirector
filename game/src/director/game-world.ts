@@ -11,6 +11,7 @@ import { listCarried, itemMatchesName } from '../items/inventory';
 import type { ItemInstance } from '../items/instance';
 import { USE_RANGE } from '../items/pickup';
 import { cellWays, type Cell } from '../world/path';
+import { AT_POST } from '../world/constants';
 import type { GameHost } from './adapter';
 import { thiefOf } from './kernels';
 import { findObject, isLiving } from './names';
@@ -36,15 +37,21 @@ function poseOf(host:GameHost, go:GameObject):Pose {
 	return { point: [p.x, p.z], facing: [f.x, f.z], ...size ? { size } : {} };
 }
 
-/** The stall or counter a vendor serves from. */
+/**
+ * The stall or counter a vendor serves from, while it stands at its post. Away from it, it is served where it stands,
+ * like anyone: its reach does not stretch back to the counter.
+ */
 function stallOf(host:GameHost, go:GameObject):GameObject | undefined {
 	const npc = go.getComponent(MarketplaceNPC);
-	return npc?.kind === 'vendor' && npc.post ? findObject(host.world, npc.post) : undefined;
+	const p = go.transform.position;
+	const atPost = npc?.kind === 'vendor' && !!npc.post && Math.hypot(p.x - npc.postX, p.z - npc.postZ) <= AT_POST;
+	return atPost ? findObject(host.world, npc.post) : undefined;
 }
 
 /**
  * How far `go`'s edge is from its middle, where it is big: a house, at its nearest wall (so its middle is in reach of
- * anyone indoors); a vendor at their `stall`, out to its counter's front (served across it).
+ * anyone indoors); a vendor at their `stall`, out to its counter's front along the way they face across it (served
+ * across it), wherever along a long counter they stand.
  */
 function sizeOf(go:GameObject, stall:GameObject | undefined):number | undefined {
 	const room = go.getComponent(Interior);
@@ -52,8 +59,13 @@ function sizeOf(go:GameObject, stall:GameObject | undefined):number | undefined 
 		return Math.min(room.bounds.maxX - room.bounds.minX, room.bounds.maxZ - room.bounds.minZ) / 2;
 	}
 	const counter = stall?.children.find((child) => child.getComponent(BoxCollider));
-	const [s, p] = [stall?.transform.position, go.transform.position];
-	return s && counter && Math.hypot(s.x - p.x, s.z - p.z) + counter.transform.localPosition.z + counter.getComponent(BoxCollider)!.size.z / 2;
+	if (!stall || !counter) {
+		return undefined;
+	}
+	const out = yawToForward(stall.transform.yaw + Math.PI);
+	const front = counter.transform.localPosition.z + counter.getComponent(BoxCollider)!.size.z / 2;
+	const [s, p] = [stall.transform.position, go.transform.position];
+	return (s.x + out.x * front - p.x) * out.x + (s.z + out.z * front - p.z) * out.z;
 }
 
 /** Whoever carries an item named `name`. */
@@ -90,8 +102,7 @@ export function gameWorld(host:GameHost):HostWorld<GameObject, Cell> {
 				if (role) {
 					return attackFor(attackVerbFor(role), role).range;
 				}
-				// Shoppers walk right into where they go, a gate's opening too: stopping short leaves them standing in the frame.
-				return using === 'go_to' && character.getComponent(MarketplaceNPC)?.kind === 'customer' ? 0.45 : REACH;
+				return REACH;
 			},
 		},
 		routes: {

@@ -236,9 +236,9 @@ describe('MemoryStore', () => {
 		ann.add({ text: 'Odo sold me Boots.', tags: ['Odo', 'Boots'], feelings: { happy: 0.5 }, timestamp: 0 });
 		const toward = ann.feelingsToward(0);
 		assert.deepEqual([...toward.keys()].sort(), ['Bram', 'Eggs'], 'by the ids its text names, never by a tag');
-		near(toward.get('Bram')!.loving, 2 / 3, 'the heavy one counts twice; one with no feeling counts not at all');
-		near(toward.get('Bram')!.happy, 0.2);
-		near(ann.feelingsToward(3 / (19 / 81) * MEMORY_DAY).get('Eggs')!.sad, 0.4, 'a lone memory, half as likely to come back');
+		near(toward.get('Bram')!.loving!, 2 / 3, 'the heavy one counts twice; one with no feeling counts not at all');
+		near(toward.get('Bram')!.happy!, 0.2);
+		near(ann.feelingsToward(3 / (19 / 81) * MEMORY_DAY).get('Eggs')!.sad!, 0.4, 'a lone memory, half as likely to come back');
 		assert.deepEqual(pool.view('Bram').feelingsToward(0).size, 0, 'he holds none of it');
 	});
 

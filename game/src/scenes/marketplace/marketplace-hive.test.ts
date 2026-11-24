@@ -1,10 +1,11 @@
-import { resetTime, stepPhysics, yawToForward, type GameObject } from '@arc-director/kindling';
+import { distanceXZ, resetTime, stepPhysics, yawToForward, type GameObject } from '@arc-director/kindling';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ArcDirector, showNamingText, type ArcResult, type ServingSpot } from 'arc-director';
 import { CharacterMotor } from '../../characters/CharacterMotor';
 import { NPCInput } from '../../characters/NPCInput';
 import { MARKETPLACE } from './marketplace-scene';
+import { leaveByGate } from './marketplace-hooks';
 import type { GameHost } from '../../director/adapter';
 import type { CharacterCtx } from '../../director/game-types';
 import { gameWorld } from '../../director/game-world';
@@ -74,9 +75,9 @@ function marketplace():Marketplace {
 	return { world, director, spawn };
 }
 
-/** A shopper at `x`, `z`, sent to `vendor`; its walk's result once it ends. */
-function shopper(m:Marketplace, id:string, x:number, z:number, vendor:string):{ go:GameObject; done:()=>ArcResult | undefined } {
-	const go = m.spawn({ id, meshID: 'Scout', marketplaceNPC: { kind: 'customer', wants: [], leaveGate: 'WestGate' } }, x, z);
+/** A shopper at `x`, `z` who leaves by `leaveGate`, sent to `vendor`; its walk's result once it ends. */
+function shopper(m:Marketplace, id:string, x:number, z:number, vendor:string, leaveGate = 'WestGate'):{ go:GameObject; done:()=>ArcResult | undefined } {
+	const go = m.spawn({ id, meshID: 'Scout', marketplaceNPC: { kind: 'customer', wants: [], leaveGate } }, x, z);
 	let result:ArcResult | undefined;
 	m.director.addCharacter({ id, kit: { verbs: ['go_to'] } });
 	void m.director.character(id)!.perform({ verb: 'go_to', args: { target: vendor } }).then((r) => {
@@ -126,7 +127,7 @@ function standing(m:Marketplace, go:GameObject, vendor:string, spot?:ServingSpot
  * the Apothecary's 1.946 m, the Toymaker's 2.346 m), plus a body's half width (0.225 m) and a hand (0.08 m).
  */
 const STALL:ServingSpot = { ahead: 1.7 };
-const SPOTS:Record<string, ServingSpot> = { Baker: STALL, Weaver: STALL, Potter: STALL, Cutler: STALL, SushiChef: STALL, Apothecary: { ahead: 2.25 }, Toymaker: { ahead: 2.65, aside: 1 } };
+const SPOTS:Record<string, ServingSpot> = { Baker: STALL, Weaver: STALL, Potter: STALL, Cutler: STALL, SushiChef: STALL, Apothecary: { ahead: 2.25 }, Toymaker: { ahead: 2.15, aside: 1 } };
 
 /** Where a shopper sets off for each seller: across its square, or for a shop, the square outside its door. */
 const FROM:Record<string, [number, number]> = {
@@ -152,6 +153,48 @@ for (const [vendor, from] of Object.entries(FROM)) {
 		m.director.dispose();
 	});
 }
+
+/** The marketplace's own ticks and step listener on `m`, as the game runs them; no shopper walks in. */
+function hosted(m:Marketplace):GameHost {
+	m.director.onStep(leaveByGate);
+	return { world: m.world, arc: m.director, hooks: {}, sceneState: () => ({ nextCustomerAt: Infinity }) } as unknown as GameHost;
+}
+
+test('a shopper whose walk to its own gate ends is walked on into the opening, and is gone', async () => {
+	const m = marketplace();
+	const host = hosted(m);
+	const buyer = shopper(m, 'Mira', 5.5, 9.5, 'WestGate');
+	const gate = m.world.findNamed('WestGate')!;
+	let nearest = Infinity;
+	await run(m, () => {
+		MARKETPLACE.hooks!.tick!(host);
+		nearest = Math.min(nearest, distanceXZ(buyer.go, gate));
+		return !m.world.objects.includes(buyer.go);
+	});
+	assert.ok(!m.world.objects.includes(buyer.go), `still in the square, ${nearest.toFixed(2)} m from the gate at most`);
+	assert.ok(nearest <= 0.35, `gone in the opening: ${nearest.toFixed(2)} m from its middle`);
+	assert.equal(m.director.character('Mira'), undefined);
+	m.director.dispose();
+});
+
+test('a shopper who comes to a gate it does not leave by stays in the square', async () => {
+	const m = marketplace();
+	const host = hosted(m);
+	const buyer = shopper(m, 'Mira', 5.5, 9.5, 'WestGate', 'EastGate');
+	await run(m, () => {
+		MARKETPLACE.hooks!.tick!(host);
+		return buyer.done() !== undefined;
+	});
+	assert.equal(buyer.done()?.status, 'ok', 'it got to the gate');
+	let ticks = 0;
+	await run(m, () => {
+		MARKETPLACE.hooks!.tick!(host);
+		return ++ticks > 90;
+	});
+	assert.ok(m.world.objects.includes(buyer.go), 'still in the square');
+	assert.ok(m.director.character('Mira'), 'still one of the hive');
+	m.director.dispose();
+});
 
 test('a second shopper waits a pace behind the first, and moves up once the first is gone', async () => {
 	const m = marketplace();
@@ -224,5 +267,16 @@ test('a shopper orders sushi only sitting at its bench, and eats it only sitting
 	const sushi = findCarried(go, (it) => it.defID === 'sushi')!;
 	assert.equal(sushi.count, 2, 'it has bought another');
 	assert.equal(showNamingText((await mira.perform(eat)).reason ?? ''), 'ate; you are full', 'and may eat it where it sits');
+	m.director.dispose();
+});
+
+test('a seller away from its post is served where it stands: its reach no longer runs back to its counter', () => {
+	const m = marketplace();
+	const geometry = gameWorld({ world: m.world, hooks: {} } as unknown as GameHost).geometry!;
+	const weaver = m.world.findNamed('Weaver')!;
+	assert.ok((geometry.getPose(weaver)?.size ?? 0) > 0, 'at its post it reaches across its counter');
+	const at = weaver.transform.position;
+	weaver.transform.localPosition = { x: at.x + 6, y: at.y, z: at.z };
+	assert.equal(geometry.getPose(weaver)?.size, undefined, 'six meters off its post it is an ordinary body');
 	m.director.dispose();
 });

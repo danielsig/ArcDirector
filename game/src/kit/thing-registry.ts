@@ -1,5 +1,6 @@
 import { looseItem } from '../items/pickup';
 import { bridge } from './bridge/bridge';
+import { campfire } from './campfire/campfire';
 import { chest } from './chests/chest';
 import { cobweb } from './cobweb/cobweb';
 import { door } from './door/door';
@@ -16,4 +17,4 @@ import { torch } from './torches/torch';
 import { tree } from './trees/trees';
 
 /** Every kind of thing on the maps, in the order they spawn on a chunk: houses last, as they find their door by name. */
-export const THINGS:readonly Thing[] = [door, chest, bridge, torch, fire, cobweb, inscription, stall, tree, pillar, boulder, waterfall, moonlight, looseItem, house];
+export const THINGS:readonly Thing[] = [door, chest, bridge, torch, fire, campfire, cobweb, inscription, stall, tree, pillar, boulder, waterfall, moonlight, looseItem, house];

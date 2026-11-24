@@ -132,11 +132,14 @@ export class LMStudioLoader {
 		await run;
 	}
 
-	/** Tokens one request to `model` may fill, as it is loaded ({@link contextPerSlot}); undefined when not known. */
-	public slotContext(model:string):number | undefined {
+	/**
+	 * Tokens `model` is loaded with, all its slots together, and one request's share with every slot busy
+	 * ({@link contextPerSlot}); undefined when not known.
+	 */
+	public contextOf(model:string):{ whole:number; slot:number } | undefined {
 		const inst = this._instances.find((row) => this.instanceMatches(row, model));
-		const context = inst && instanceContextLength(inst.config);
-		return inst && context !== undefined ? contextPerSlot(context, configNumber(inst.config, 'parallel') ?? this._deps.loadOf(model).parallel) : undefined;
+		const whole = inst && instanceContextLength(inst.config);
+		return inst && whole !== undefined ? { whole, slot: contextPerSlot(whole, configNumber(inst.config, 'parallel') ?? this._deps.loadOf(model).parallel) } : undefined;
 	}
 
 	public hasReusable(model:string):boolean {

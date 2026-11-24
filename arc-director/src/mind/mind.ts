@@ -414,9 +414,9 @@ export type MindFields<TCtx> = {
 
 /**
  * Writes arcs: it thinks with the model about its owner's persona and what the owner's voice senses, and hands
- * each arc to that voice. It holds no story of its own, only its settings and thinking state, so it can be
- * swapped or dropped without losing who its owner is. A character owns at most one mind; a collective always
- * has one, shared by its characters.
+ * each arc to that voice, as whom it speaks: a collective's commander lends it who it is and its own pinned memories.
+ * It holds no story of its own, only its settings and thinking state, so it can be swapped or dropped without losing
+ * who its owner is. A character owns at most one mind; a collective always has one, shared by its characters.
  *
  * It thinks with one of its director's models (`getModel`), by the role in its settings' `model`, or
  * with the default model when it names none or that one is removed. It never changes a model's settings, and asks
@@ -441,6 +441,8 @@ export class Mind<TCtx = unknown> {
 	private _id = '';
 	/** Who the think under way began for. */
 	private _thinkingAs = '';
+	/** The watch that woke the think under way, by name: what just happened, so memories tagged with it come to mind. */
+	private _wokenBy:string | undefined;
 	/** Its laws' results since the last think, oldest first. */
 	private _lawResults:LawLine[] = [];
 	/** The last arc or think's result, as the next prompt shows it. */
@@ -887,6 +889,7 @@ export class Mind<TCtx = unknown> {
 		let error:string | undefined;
 		let started = false;
 		this._thinkingAs = this.thinkThread();
+		this._wokenBy = why?.match(/^watch (.+)/)?.[1];
 		this._stream = enact && this.voice.execute ? this.voice.stream() : undefined;
 		const heard:HeldEvent[] = [];
 		this._heard = heard;
@@ -1062,7 +1065,7 @@ export class Mind<TCtx = unknown> {
 	/** One strategic pass: the model revises goals and identity, in the form this mind writes (`arcFormat`). A reply that does not read changes nothing. */
 	private async reviseGoals(chat:ModelChat):Promise<void> {
 		const format = this.arcFormat;
-		const system = stablePrefix(this.id, this.persona.identity, this.owner.activeVerbs(), {
+		const system = stablePrefix(this.voice.id, this.voice.persona.identity, this.owner.activeVerbs(), {
 			includeWatches: true,
 			omitArc: true,
 			systemNote: this.setting('systemNote'),
@@ -1104,7 +1107,7 @@ export class Mind<TCtx = unknown> {
 				return;
 			}
 			if (raw.identity !== undefined) {
-				this.persona.applyIdentityPatch(raw.identity, this._now);
+				this.voice.persona.applyIdentityPatch(raw.identity, this._now);
 			}
 			if (Array.isArray(raw.goals)) {
 				this.persona.applyGoalList(raw.goals);
@@ -1263,7 +1266,7 @@ export class Mind<TCtx = unknown> {
 			.map((v) => typeof v === 'string' ? v : JSON.stringify(v))
 			.join('\n');
 		const meaning = await this.memory.meanings(perceptionText, this._pendingAbout);
-		const intrusions = this.memory.intrude(perceptionText, this._pendingEvents.flatMap((e) => mergeTags(e.tags, e.who)), meaning.seen, meaning.lens);
+		const intrusions = this.memory.intrude(perceptionText, this._pendingEvents.flatMap((e) => mergeTags(e.tags, e.who)).concat(this._wokenBy ?? []), meaning.seen, meaning.lens);
 		const parts = this.promptParts();
 		const changes = this.memory.noteSeen();
 		const { recalled, ...lines } = this.memory.lines(perceptionText, this._pendingAbout, meaning.recalled, meaning.lens);
@@ -1367,7 +1370,7 @@ export class Mind<TCtx = unknown> {
 		// What the stream began runs on whatever comes of the rest: it stays in the Arc, and only the rest is judged and goes back.
 		const fed:Arc = [];
 		const feed = this.feeder(reader, format, fed);
-		const system = stablePrefix(this.id, this.persona.identity, this.owner.promptVerbs?.() ?? verbs, {
+		const system = stablePrefix(this.voice.id, this.voice.persona.identity, this.owner.promptVerbs?.() ?? verbs, {
 			includeWatches: this.persona.watchesWritable || watchCount(this.persona.watchList()) > 0,
 			watchesWritable: verbs.has('watch'),
 			canObserve: toolNames.includes('observe'),
@@ -1388,7 +1391,7 @@ export class Mind<TCtx = unknown> {
 		// This think has read its laws' results: from now on they are only remembered.
 		this.rememberLaws(this._lawResults);
 		this._lawResults = [];
-		this.persona.memory.agePins();
+		this.persona.memory.agePins(this.ownKnowers());
 		const messages:ChatMessage[] = [
 			{ role: 'system', content: system },
 			{ role: 'user', content: user },
@@ -1913,7 +1916,7 @@ export class Mind<TCtx = unknown> {
 		return this.persona.goals.filter((g) => (text ? g.text === mark + text : g.text.startsWith(mark)));
 	}
 
-	/** `set_goal`, `drop_goal`, `finish_goal` or `set_identity` as `by` runs it, which is how the model edits who this mind is. Undefined for any other step. */
+	/** `set_goal`, `drop_goal`, `finish_goal` or `set_identity` (who `by` is) as `by` runs it, which is how the model edits who this mind is. Undefined for any other step. */
 	private editPersona(step:Step, by:ArcRunner<TCtx>):ArcResult | undefined {
 		// A goal another of its characters sets is marked as theirs, and only they finish or drop it by name.
 		const mark = by === this.voice ? '' : `[${by.id}] `;
@@ -1938,7 +1941,7 @@ export class Mind<TCtx = unknown> {
 			return { status: 'ok', verb: 'drop_goal' };
 		}
 		if (step.verb === 'set_identity') {
-			const changed = this.persona.applyIdentityPatch(step.args, this._now);
+			const changed = by.persona.applyIdentityPatch(step.args, this._now);
 			return { status: changed ? 'ok' : 'failed', verb: 'set_identity', reason: changed ? undefined : 'nothing to change' };
 		}
 		return undefined;

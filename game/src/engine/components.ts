@@ -160,8 +160,8 @@ export abstract class Barrier extends Component {
 		return why;
 	}
 
-	/** Whether someone at `from` clears it just by walking up, so a route may go through it. */
-	public opensFrom(from:XZ):boolean {
+	/** Whether `body` at `from` clears it just by walking up, so a route may go through it. */
+	public opensFrom(body:GameObject, from:XZ):boolean {
 		return false;
 	}
 
@@ -299,14 +299,18 @@ export type MarketplaceNPCKind = 'vendor' | 'customer' | 'guard';
 
 /** Flea-marketplace role: vendors stay; customers leave through a gate when satisfied. */
 export class MarketplaceNPC extends Component {
-	public static override saved = ['wants', 'leaveGate', 'leaving', 'postX', 'postZ', 'post'];
+	public static override saved = ['wants', 'leaveGate', 'leaving', 'postX', 'postZ', 'postYaw', 'post'];
 	public kind:MarketplaceNPCKind = 'customer';
 	public wants:string[] = [];
 	public leaveGate = '';
+	/** Walking out through its gate, once its walk there ended: out of the minds, and gone once past its middle. */
 	public leaving = false;
-	/** Where a vendor stands. They are not sent off this post. */
+	/** Whether it has strolled yet: a shopper starts off strolling, and only then may stand about. */
+	public strolled = false;
+	/** Where a vendor stands, and which way, facing out across its counter. They are not sent off this post. */
 	public postX = 0;
 	public postZ = 0;
+	public postYaw = 0;
 	public post = '';
 }
 

@@ -2844,7 +2844,7 @@ describe('models', () => {
 		assert.ok(Math.abs(feelings.levelOf('Ann', 'loving') - 0.6) < 1e-9, `loving 0.9, 3 paces ahead: two thirds as salient, not ${feelings.levelOf('Ann', 'loving')}`);
 		await director.character('Bram')!.mind!.thinkNow({ enact: false });
 		assert.equal(feelings.of('Bram'), undefined, 'he feels nothing for her');
-		const toward = ():number => director.character('Ann')!.persona.memory.feelingsToward(director.time).get('Bram')!.loving;
+		const toward = ():number => director.character('Ann')!.persona.memory.feelingsToward(director.time).get('Bram')!.loving!;
 		assert.ok(toward() > 0.89, 'where she saw him is kept with no feeling of the moment');
 		director.tick(100);
 		await director.character('Ann')!.mind!.thinkNow({ enact: false });
@@ -3160,7 +3160,7 @@ describe('shared inference', () => {
 			.onVerb(() => ({ status: 'ok' }))
 			.addCharacter({ id: 'Able', mind: {} })
 			.connect();
-		assert.equal(director.getModel()?.slotContext, 8192);
+		assert.equal(director.getModel()?.slotContext(), 8192);
 		assert.equal(director.character('Able')!.mind!.thinksWith.contextTokens, 8192, 'a quarter of the context, as LM Studio gives each of 4 slots');
 		director.dispose();
 	});

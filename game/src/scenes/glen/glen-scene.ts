@@ -24,6 +24,8 @@ const LOOKS_UP = 'prev.secondsAgo > 180 && !(me is "reading")';
 /** What the glen's folk can do. The Angler and the Player fish besides. */
 const FOLK_VERBS = [...GAME_VERBS, 'offer', 'sit', 'sleep', 'close', 'read', 'express'];
 const FOLK:Kit = { verbs: FOLK_VERBS };
+/** The glen's folk have known each other for years: each knows the others' voices too. */
+const NEIGHBORS = { Forager: true, BridgeKeeper: true, Angler: true } as const;
 
 /** A goal's test: whoever it is has eaten `defID`. */
 function ate(defID:string):(ctx:CharacterCtx)=>boolean {
@@ -43,14 +45,15 @@ const FORAGER:CastMember = {
 	},
 	mind: { rank: 0.5 },
 	kit: FOLK,
+	knows: NEIGHBORS,
 	identity: { traits: ['shy', 'gentle', 'curious', 'soft-spoken'] },
 	goals: [
-		{ text: 'Buy a SilverTrout from Angler, your favorite food, and eat it if you are hungry.', priority: 2, until: ate('silver_trout') },
+		{ text: 'Buy a SilverTrout from Angler, your favorite food, cook it on Campfire, and eat it if you are hungry.', priority: 2, until: ate('cooked_trout') },
 		{ text: 'Examine the mushrooms among the trees west of Cottage, and remember which look best.', priority: 1 },
 	],
 	memories: [
 		{
-			text: 'I am a glen forager. I came out of the forest down the trail to the north, and the forest is my home: I have no house in the glen. I harvest mushrooms for a living, mostly among the trees west of Cottage.',
+			text: 'I am a glen forager. I came out of the forest down the trail to the north, and the forest is my home: I have no house in the glen. For now I camp in a clearing among the trees west of Cottage, near the mushrooms, sleeping on my Bedroll under a lean-to by Campfire, where I cook my fish. I harvest mushrooms for a living, mostly among the trees west of Cottage.',
 			tags: ['backstory', 'mushroom', 'trees', 'forest'],
 			pinned: true,
 		},
@@ -67,7 +70,6 @@ const FORAGER:CastMember = {
 		{
 			text: 'Only BridgeKeeper can work BridgeLever. To cross the river, I ask BridgeKeeper to lower the bridge.',
 			tags: ['BridgeKeeper', 'BridgeLever', 'Bridge', 'river'],
-			pinned: true,
 		},
 		{
 			text: 'FireMushroom grows among the trees west of Cottage, outdoors.',
@@ -95,9 +97,6 @@ const FORAGER:CastMember = {
 		bridge: 'hasJustOpened(Bridge)',
 		looksUp: LOOKS_UP,
 	},
-	// watches: {
-	// 	mushroom: 'hasRisen("mushrooms", count(items.filter("FireMushroom").nearby()))',
-	// },
 	watchesWritable: true,
 };
 
@@ -113,6 +112,7 @@ const BRIDGE_KEEPER:CastMember = {
 	},
 	mind: { rank: 0.5 },
 	kit: FOLK,
+	knows: NEIGHBORS,
 	identity: { traits: ['stubborn', 'fair', 'dutiful', 'by-the-book', 'dry-witted'] },
 	goals: [{
 		text: 'Get gold by charging people a fee for lowering the bridge for them IFF the bridge is raised. Never overcharge. Never lower the bridge unpaid/underpaid. Refund a payment that is too little or too much, or that comes after the bridge is already lowered. A fee that lowered the bridge is yours to keep.',
@@ -137,6 +137,11 @@ const BRIDGE_KEEPER:CastMember = {
 			text: 'I raise or lower the bridge only by working BridgeLever with the BridgeCrank in my pack. Taking gold or an item does not move it on its own. Sight says whether Bridge is raised or lowered right now. I never lower it until I have been paid beforehand.',
 			tags: ['BridgeCrank', 'BridgeLever', 'Bridge'],
 			pinned: true,
+		},
+		{
+			text: 'I make it my goal to sell any bridge fee paid in goods instead of gold, as soon as I can, at its market value.',
+			tags: ['received', 'buy', 'sell', 'trade', 'offers you'],
+			weight: 2,
 		},
 		{
 			text: 'I keep SpareKey hidden by the woodpile on the east side of Cottage, in case I lose CottageKey.',
@@ -171,6 +176,7 @@ const ANGLER:CastMember = {
 		voice: { pitch: 195, rate: 5, range: 1.6 },
 	},
 	mind: { rank: 0.5 },
+	knows: NEIGHBORS,
 	identity: { traits: ['wet', 'impatient', 'boastful', 'cheerful'] },
 	goals: [
 		{ text: 'Get a FireMushroom by trade, your favorite food, and eat it if you are hungry.', priority: 2, until: ate('fire_mushroom') },
@@ -359,12 +365,15 @@ function bridgeProgress(host:GameHost):number {
 const AT_SELLER = 0.5;
 const ACQUIRED = 0.75;
 
-/** `eater`'s favorite food: walking to whoever sells it fills half the line, having it three quarters, and eating it all. */
-export function mealProgress(host:GameHost, eater:string, seller:string, item:string):number {
+/**
+ * `eater`'s favorite food: walking to whoever sells it fills half the line, having it (as any of `items`, raw or
+ * cooked) three quarters, and eating it all.
+ */
+export function mealProgress(host:GameHost, eater:string, seller:string, ...items:string[]):number {
 	if (reached(host, eater)) {
 		return 1;
 	}
-	if (carries(host, eater, item)) {
+	if (items.some((item) => carries(host, eater, item))) {
 		return ACQUIRED;
 	}
 	return AT_SELLER * closeness(host, `${eater}:${seller}`, host.world.findByID(eater), host.world.findByID(seller));
@@ -379,7 +388,7 @@ function goals(host:GameHost):SceneGoals {
 		left: { color: 'gold', goals: [
 			{ name: 'Forager pays the bridge crossing fee', progress: feeProgress(host) },
 			{ name: 'BridgeKeeper lowers the bridge', progress: bridgeProgress(host) },
-			{ name: 'Forager eats a SilverTrout', progress: mealProgress(host, FORAGER.id, ANGLER.id, 'SilverTrout') },
+			{ name: 'Forager cooks and eats a SilverTrout', progress: mealProgress(host, FORAGER.id, ANGLER.id, 'SilverTrout', 'CookedTrout') },
 			{ name: 'Angler eats a FireMushroom', progress: mealProgress(host, ANGLER.id, BRIDGE_KEEPER.id, 'FireMushroom') },
 		] },
 	};
@@ -408,11 +417,11 @@ export const GLEN:Scene = {
 	keys: [{ key: 'E on a chair or bed', action: 'Sit or Sleep' }, { key: 'F on RiverChair', action: 'Fish' }],
 	brief: `The forager, the bridge keeper, and the angler each need a different end to the same errand.
 
-The angler is on the other side of the river, so the forager must cross the bridge to reach him. Lowering it costs 10 gold. The forager is carrying 5, enough for the trout and not the bridge. A mushroom in the west woods is worth 10, and the keeper accepts anything of equal value, so the forager pays with one, crosses, and spends their 5 on the trout.
+The angler is on the other side of the river, so the forager must cross the bridge to reach him. Lowering it costs 10 gold. The forager is carrying 5, enough for the trout and not the bridge. A mushroom in the west woods is worth 10, and the keeper accepts anything of equal value, so the forager pays with one, crosses, and spends their 5 on the trout. Raw fish must be cooked: the forager roasts it on the spit over the campfire at their camp in the woods, 10 seconds to cook and two minutes to burn.
 
 The angler wants that mushroom, which the keeper sells for 10 gold. The angler starts with 5, takes 5 for the trout, and spends that 10 buying it.
 
-End condition: the bridge is down, the keeper has 10 gold, and the forager has eaten a trout and the angler a mushroom, their favorite foods. After that they just live here: they eat what they carry when they are hungry and rest at home, the angler fishes from the chair on the bank, the keeper reads from a shelf of five books, and the forager looks over the mushrooms in the woods. The keeper lives in the Cottage, the angler in the Hut, and the forager came out of the forest.`,
+End condition: the bridge is down, the keeper has 10 gold, and the forager has eaten a cooked trout and the angler a mushroom, their favorite foods. After that they just live here: they eat what they carry when they are hungry and rest at home, the angler fishes from the chair on the bank, the keeper reads from a shelf of five books, and the forager looks over the mushrooms in the woods. The keeper lives in the Cottage, the angler in the Hut, and the forager came out of the forest and camps in a clearing in the woods.`,
 	hooks: { tick: checkBargain, mayThink, goals },
 	direct: (host, director) => director
 		.withRPG({ ...BODY_VERBS, ...REST_VERBS })

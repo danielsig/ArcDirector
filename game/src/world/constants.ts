@@ -1,5 +1,7 @@
-/** How far a stall vendor may step from the post they spawned on. */
-export const STALL_LEASH = 4;
+/** How far a stall vendor may step from the post they spawned on: to a buyer at their counter, never across the square. */
+export const STALL_LEASH = 2;
+/** How far off its post a vendor still stands at it, serving across its counter (m). */
+export const AT_POST = 0.5;
 
 export const CHUNK_SIZE = 16;
 /** A map boulder's size range, as a scale on its look: picked by where it stands, mostly small to middling. */

@@ -32,8 +32,12 @@ export const MARKETPLACE_LEGEND:Record<string, TerrainLegend | EntityLegend> = {
 	'D': { kind: 'entity', def: 'gate', axis: 'x', over: '.', locked: false, open: true, components: [MarketplaceGate] },
 	'I': { kind: 'entity', def: 'gate', axis: 'x', over: '.', locked: false, open: true, components: [MarketplaceGate] },
 	'A': shopDoor('slate', true),
-	'T': shopDoor(),
+	// In ToyShop's north wall: turned around, so it opens out onto the square, as ApothecaryShopDoor does, its leaf to the
+	// west, clear of the line that runs out of the door to Toymaker's serving spot.
+	'T': { ...shopDoor(undefined, true), yaw: -Math.PI / 2 },
 	't': { kind: 'entity', def: 'wall_torch', over: '.' },
+	/** A torch on a shop's inside wall, over its floorboards. */
+	'u': { kind: 'entity', def: 'wall_torch', over: 'P' },
 	'*': { kind: 'entity', def: 'tree', over: '"' },
 	'@': { kind: 'entity', def: 'player_start' },
 	/** The stalls: their wares spill out beside them. */

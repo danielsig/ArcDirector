@@ -186,33 +186,41 @@ export type SweepLook = { draw:number; fade:number; inner:THREE.ColorRepresentat
 
 /**
  * A crescent ribbon swept between two edges of a motion (a blade's swing): `inner[i]` and `outer[i]`
- * (world) at the same moment `i` of it, first to last.
+ * (world) at the same moment `i` of it, first to last. While `tracing` says so the caller adds to them, and the ribbon
+ * grows with them, drawn as far as they go; it fades once they stop.
  */
-export function sweep(scene:THREE.Object3D, inner:THREE.Vector3[], outer:THREE.Vector3[], look:SweepLook):void {
-	const n = Math.min(inner.length, outer.length);
-	if (n < 2) {
-		return;
-	}
-	const positions = new Float32Array(n * 2 * 3);
-	const uvs = new Float32Array(n * 2 * 2);
-	const index:number[] = [];
-	for (let i = 0; i < n; i++) {
-		inner[i]!.toArray(positions, i * 6);
-		outer[i]!.toArray(positions, i * 6 + 3);
-		uvs.set([i / (n - 1), 0, i / (n - 1), 1], i * 4);
-		if (i > 0) {
-			const a = (i - 1) * 2;
-			index.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
-		}
-	}
+export function sweep(scene:THREE.Object3D, inner:THREE.Vector3[], outer:THREE.Vector3[], look:SweepLook, tracing = ():boolean => false):void {
 	const geometry = new THREE.BufferGeometry();
-	geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-	geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
-	geometry.setIndex(index);
+	const shape = ():void => {
+		const n = Math.min(inner.length, outer.length);
+		const positions = new Float32Array(n * 2 * 3);
+		const uvs = new Float32Array(n * 2 * 2);
+		const index:number[] = [];
+		for (let i = 0; i < n; i++) {
+			inner[i]!.toArray(positions, i * 6);
+			outer[i]!.toArray(positions, i * 6 + 3);
+			uvs.set([i / Math.max(1, n - 1), 0, i / Math.max(1, n - 1), 1], i * 4);
+			if (i > 0) {
+				const a = (i - 1) * 2;
+				index.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+			}
+		}
+		geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+		geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+		geometry.setIndex(index);
+		geometry.computeBoundingSphere();
+	};
+	shape();
+	// How old the ribbon was when its tracing last ran.
+	let traced:number | null = null;
 	const uniforms = { uHead: { value: 0 }, uTail: { value: 0 }, uInner: { value: new THREE.Color(look.inner) }, uOuter: { value: new THREE.Color(look.outer) } };
 	addMeshEffect(scene, new THREE.Mesh(geometry, effectMaterial(SURFACE_VERTEX, SWEEP_FRAGMENT, uniforms)), (age) => {
-		uniforms.uHead.value = Math.min(1, age / look.draw);
-		const fade = Math.max(0, (age - look.draw) / look.fade);
+		if (tracing()) {
+			shape();
+			traced = age;
+		}
+		uniforms.uHead.value = traced === null ? Math.min(1, age / look.draw) : 1;
+		const fade = Math.max(0, (age - (traced ?? look.draw)) / look.fade);
 		// Erased tail first, easing out.
 		uniforms.uTail.value = 1 - (1 - Math.min(1, fade)) ** 2;
 		return fade < 1;

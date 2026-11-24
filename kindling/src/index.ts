@@ -100,6 +100,6 @@ export {
 	type ToonExpressionTarget,
 	type ToonModelOptions,
 } from './assets/toon-model.js';
-export { holdInHand, lookAt, reach, placeFoot, orientHand, aimHeld, closeHand, crouch, drawBow, otherHand, palmOf, restFoot, type Hand, type Grip, type Bend } from './assets/toon-pose.js';
+export { holdInHand, holdAt, degrees, mirrored, lookAt, reach, placeFoot, orientHand, closeHand, crouch, drawBow, otherHand, palmOf, restFoot, type Hand, type Grip, type HeldPose, type Bend } from './assets/toon-pose.js';
 export { Animator } from './render/Animator.js';
 export { ease, move, type MovePhase, type MoveSample, type MoveTiming } from './assets/move.js';

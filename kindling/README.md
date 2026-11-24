@@ -476,10 +476,10 @@ await registerGltf('tri', '/triangle.gltf');
 
 `Animator` plays clips on it, and `toonClip` fits library clips to each body. Every frame starts from the clip's pose, so bones you pose on top never pile up. After the clip, every frame, you can:
 
-- put a prop in a hand with `holdInHand(mesh, 'right', prop, grip)`;
+- put a prop in a hand with `holdInHand(mesh, 'right', prop, grip)`: a `Grip` is where on the prop the fist closes and the prop's turn in the hand (`degrees(x, y, z)`), mirrored for the left;
+- hold it somewhere with `holdAt(mesh, 'right', prop, { at, turn, elbow }, weight)`: the hand takes the turn that carries the prop so, and the arm reaches to put its handle at `at`, the elbow toward `elbow` (no aiming to solve: lerp and slerp between poses);
 - turn the head with `lookAt(mesh, point, weight)`;
 - bend an arm toward a point with `reach(mesh, 'right', point, weight)` (two-bone IK);
-- turn the hand so a held prop points the right way (a sword's tip and its flat) with `aimHeld(mesh, 'right', prop, axis, side, point, facing, weight)`;
 - draw a rigged bow's string with `drawBow(bow, nock)`.
 
 `humanBone(mesh, 'head')` and `restTurn(mesh, bone)` give you the bones. `otherHand(hand)` is the hand a `Hand` is not. `scripts/shoot.mjs <url> <out.png>` screenshots a page in headless Chrome once the page's title is `ready` (the playground's `character.html?shot=turnaround|faces` works this way).

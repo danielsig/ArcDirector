@@ -155,7 +155,7 @@ function fillPct(s:HudSpeech):number {
 						role="img"
 						:aria-label="ITEM_DEFS[defID]?.name ?? defID"
 					>
-						<template v-if="defID === 'silver_trout'">
+						<template v-if="defID.endsWith('_trout')">
 							<path d="M1 6c2-3 6-3 8 0-2 3-6 3-8 0z" fill="currentColor" />
 							<path d="M8.5 6 11.5 3.5v5z" fill="currentColor" />
 							<circle cx="3.2" cy="5.6" r="0.7" fill="#1a1208" />

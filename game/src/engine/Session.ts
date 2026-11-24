@@ -8,7 +8,7 @@ import { GameHost, addModels } from '../director/adapter';
 import { playerSay, playerSayCatalog } from '../director/player-talk';
 import { dumpLookMaps } from '../director/ai-log-sink';
 import type { HudUI } from '../ui/hud-model';
-import { flagsFromURL, prefs, setPrefs, watchPrefs, type PlayerMode, type Prefs } from '../prefs';
+import { flagsFromURL, PLAYER_MODES, prefs, setPrefs, watchPrefs, type PlayerMode, type Prefs } from '../prefs';
 import { defaultSystemOne } from '../director/hosted';
 import { quickBenchRunning } from '../director/quick-bench';
 import { readSave } from './game-save';
@@ -25,6 +25,8 @@ export class Session extends Component {
 	public scene!:Scene;
 	public pose!:PlayerPose;
 	public slot!:SaveSlot;
+	/** Testing (the `scrub` command): seconds the game runs before it holds still; 0 holds it, null runs freely. */
+	public scrub:number | null = null;
 	private _unbindControl = ():void => undefined;
 	private _unwatchPrefs = ():void => undefined;
 	/** Whether a bench ran last frame: one sets the shared model up its own way, so play's settings come back after. */
@@ -215,6 +217,9 @@ export class Session extends Component {
 		}
 		if (!this.hud.sayOpen && world.input.pressed('Tab')) {
 			this.toggleChat();
+		}
+		if (!this.hud.sayOpen && world.input.pressed('KeyV')) {
+			setPrefs({ player: PLAYER_MODES[(PLAYER_MODES.indexOf(prefs().player) + 1) % PLAYER_MODES.length] });
 		}
 		if (!this.hud.sayOpen && world.input.pressed('Backquote')) {
 			this.hud.aiLogOpen = !this.hud.aiLogOpen;

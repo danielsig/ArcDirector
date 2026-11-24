@@ -880,6 +880,51 @@ describe('commander pointer and sticky command', () => {
 		director.dispose();
 	});
 
+	it('speaks as its commander, who it is and its own pins, and as itself with none', async () => {
+		let prompt = '';
+		const director = await new ArcDirector<Ctx>()
+			.withMind({ arcFormat: 'text' })
+			.addFake({ chat: (req) => {
+				prompt = req.messages.map((m) => chatContentText(m.content)).join('\n');
+				return { content: 'wait()', toolCalls: [] };
+			} })
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
+			.withDefaultKit(COLLECTIVE_KIT)
+			.withKernels(kernels())
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
+			.withContext((id) => ({ id }))
+			.addCollective({
+				id: 'DawnParty',
+				mind: { rethinkingThreshold: 0 },
+				kit: COLLECTIVE_KIT,
+				commander: 'Dawn',
+				identity: { role: 'Party' },
+				memories: [{ text: 'We hold the ford.', pinned: true, tags: ['backstory', 'ford'] }],
+				characters: [
+					{ id: 'Dawn', identity: { role: 'Captain', traits: ['booming'] }, memories: [{ text: 'I bellow every order.', pinned: true, tags: ['backstory', 'voice'] }] },
+					{ id: 'Wisp', identity: { role: 'Archer', traits: ['quiet'] } },
+				],
+			})
+			.connect();
+		const party = director.collective('DawnParty')!;
+		await party.mind.thinkNow({ enact: false });
+		assert.match(prompt, /You are Dawn\. Role: Captain\.\nTraits: booming\./);
+		assert.match(prompt, /We hold the ford\.[\s\S]*You bellow every order\./);
+		party.commander = party.character('Wisp')!;
+		await party.mind.thinkNow({ enact: false });
+		assert.match(prompt, /You are Wisp\. Role: Archer\.\nTraits: quiet\./);
+		assert.match(prompt, /We hold the ford\./);
+		assert.doesNotMatch(prompt, /bellow/, 'the fallen captain\'s voice goes with it');
+		await party.mind.perform({ verb: 'set_identity', args: { traits: ['steady'] } }, party.voice);
+		assert.deepEqual(party.character('Wisp')!.persona.identity.traits, ['steady'], 'who speaks changes');
+		assert.equal(party.persona.identity.traits, undefined);
+		party.commander = null;
+		await party.mind.thinkNow({ enact: false });
+		assert.match(prompt, /You are DawnParty\. Role: Party\./);
+		director.dispose();
+	});
+
 	it('does not ask a think again when only the commander\'s own step changed while it thought', async () => {
 		const gates:Array<()=>void> = [];
 		let hangThink:((content:string)=>void) | undefined;

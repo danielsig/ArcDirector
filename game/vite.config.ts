@@ -43,6 +43,7 @@ export default defineConfig({
 			'@arc-director/kindling': fileURLToPath(new URL('../kindling/src/index.ts', import.meta.url)),
 			'@arc-director/control': fileURLToPath(new URL('../control/src/index.ts', import.meta.url)),
 			'arc-director/bench': fileURLToPath(new URL('../arc-director/src/bench/index.ts', import.meta.url)),
+			'arc-director/testing': fileURLToPath(new URL('../arc-director/src/testing/index.ts', import.meta.url)),
 			'arc-director': fileURLToPath(new URL('../arc-director/src/index.ts', import.meta.url)),
 		},
 	},

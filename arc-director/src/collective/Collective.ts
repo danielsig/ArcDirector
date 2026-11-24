@@ -132,7 +132,7 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 		this._commander = character;
 	}
 
-	/** The commander, or the collective itself while it has none. */
+	/** The commander, or the collective itself while it has none: whom its mind speaks as, by identity and pinned memories. */
 	public get voice():ArcRunner<TCtx> {
 		return this._commander ?? this;
 	}

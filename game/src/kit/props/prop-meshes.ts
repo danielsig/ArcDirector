@@ -943,6 +943,38 @@ function net():PropPart[] {
 	];
 }
 
+// A lean-to: an oilcloth slung from a ridge pole on two forked posts down to the ground behind, open to the front (+Z).
+// Centered on its origin, so its footprint is its outline.
+
+const LEAN_RIDGE = 1.15;
+const LEAN_FRONT = 0.6;
+const LEAN_BACK = -0.6;
+const leanPost = keep(tube([{ x: 0, y: 0, z: 0 }, { x: 0, y: LEAN_RIDGE + 0.08, z: 0 }], 0.03, 6));
+const ridgePole = rod(2.1, 0.03);
+const tarp = keep(new THREE.PlaneGeometry(1.95, Math.hypot(LEAN_RIDGE, LEAN_FRONT - LEAN_BACK), 1, 1));
+const oilcloth = paint(0x8a7a5a, { side: THREE.DoubleSide, shadowSide: THREE.DoubleSide });
+
+function leanTo():PropPart[] {
+	return [
+		...[-0.88, 0.88].map((x) => at('lean-post', leanPost, woodDark, x, 0, LEAN_FRONT)),
+		at('lean-ridge', ridgePole, wood, 0, LEAN_RIDGE, LEAN_FRONT),
+		at('lean-tarp', tarp, oilcloth, 0, LEAN_RIDGE / 2, (LEAN_FRONT + LEAN_BACK) / 2, Math.atan2(LEAN_FRONT - LEAN_BACK, LEAN_RIDGE)),
+	];
+}
+
+// A bedroll laid out on the ground, a blanket rolled up for a pillow at its head (-Z, as a bed's).
+
+const bedrollPad = keep(bevelBox(0.72, 0.05, 1.7, 0.02));
+const bedrollRoll = rod(0.66, 0.065, 9);
+const wool = paint(0x5a6a3a);
+
+function bedroll():PropPart[] {
+	return [
+		at('bedroll', bedrollPad, wool, 0, 0.025, 0),
+		at('bedroll-roll', bedrollRoll, burlap, 0, 0.07, -0.72),
+	];
+}
+
 const catalog:Record<PropID, PropPart[]> = {
 	broom: broom(),
 	bucket: bucket(),
@@ -984,6 +1016,8 @@ const catalog:Record<PropID, PropPart[]> = {
 	creel: creel(),
 	oars: oars(),
 	net: net(),
+	leanTo: leanTo(),
+	bedroll: bedroll(),
 };
 
 export function propParts(id:PropID):PropPart[] {

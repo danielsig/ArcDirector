@@ -23,6 +23,8 @@ export type ItemDef = {
 		Goods?:{ ask:number };
 		/** What reading it may turn up, a page at a time. */
 		Book?:{ pages:string[] };
+		/** What it turns into after `seconds` over a fire (`Campfire`). Without `Consumable` it is raw: cooked, it is food. */
+		Cookable?:{ into:string; seconds:number };
 	};
 };
 
@@ -299,10 +301,33 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 		name: 'Silver trout',
 		stackable: true,
 		maxStack: 9,
-		meshID: 'item_potion',
+		meshID: 'item_trout',
 		color: 0x9eb4c8,
-		about: 'Bright scales and clear eyes: fresh from the river.',
-		components: { Goods: { ask: 5 }, Consumable: { effect: 'food', amount: 0, consumeOnUse: true } },
+		about: 'Bright scales and clear eyes: fresh from the river, and raw. It wants a fire before anyone eats it.',
+		components: { Goods: { ask: 5 }, Cookable: { into: 'cooked_trout', seconds: 10 } },
+	},
+	cooked_trout: {
+		id: 'cooked_trout',
+		aliases: ['Cooked Trout', 'trout', 'fish'],
+		name: 'Cooked trout',
+		stackable: true,
+		maxStack: 9,
+		meshID: 'item_trout_cooked',
+		color: 0xc8843a,
+		about: 'Golden skin crackling off the flesh, smelling of woodsmoke. Leave it on the fire and it chars.',
+		// Two minutes over the fire from raw, it is charcoal.
+		components: { Goods: { ask: 6 }, Consumable: { effect: 'food', amount: 0, consumeOnUse: true }, Cookable: { into: 'burnt_trout', seconds: 110 } },
+	},
+	burnt_trout: {
+		id: 'burnt_trout',
+		aliases: ['Burnt Trout', 'trout', 'fish'],
+		name: 'Burnt trout',
+		stackable: true,
+		maxStack: 9,
+		meshID: 'item_trout_burnt',
+		color: 0x2a2420,
+		about: 'Black and brittle to the bone, left on the fire too long: not fit to eat.',
+		components: {},
 	},
 	sushi: {
 		id: 'sushi',

@@ -16,9 +16,10 @@ type Ctx = { id:string };
 
 /**
  * Ada at the origin, Bram 3 paces north of her and Cy beside him, everyone in earshot and facing `facing` (south, so
- * Bram and Cy face Ada, by default). `specs` adds to each one's spec; Ada and Cy think.
+ * Bram and Cy face Ada, by default). `acquaintance` makes who knows whom the game's; `specs` adds to each one's spec;
+ * Ada and Cy think.
  */
-function scene(acquaintance:AcquaintanceOptions<Ctx>, specs:Record<string, Partial<CharacterSpec<Ctx>>> = {}, facing:Record<string, Vec> = {}, chat?:FakeChatFn) {
+function scene(acquaintance:AcquaintanceOptions<Ctx> | undefined, specs:Record<string, Partial<CharacterSpec<Ctx>>> = {}, facing:Record<string, Vec> = {}, chat?:FakeChatFn) {
 	const points:Record<string, Vec> = { Ada: [0, 0], Bram: [0, -3], Cy: [2, -3] };
 	const face = (id:string):Vec => facing[id] ?? [0, 1];
 	const others = (id:string):string[] => Object.keys(points).filter((other) => other !== id);
@@ -32,7 +33,9 @@ function scene(acquaintance:AcquaintanceOptions<Ctx>, specs:Record<string, Parti
 		.withSight({ look: ({ id }) => ({ self: { id, point: points[id], facing: face(id) }, objects: others(id).map((other) => ({ id: other, point: points[other], facing: face(other), tags: ['character'] })) }) })
 		.withKernels(({ id }) => ({ me: dummyEntity(id), others: others(id).map((other) => dummyEntity(other)), items: [], nearRadius: 5 }))
 		.withTalk({ others, inRange: () => true })
-		.withAcquaintance(acquaintance)
+		.if(acquaintance,
+			(d) => d.withAcquaintance(acquaintance),
+		)
 		.addCharacter({ id: 'Ada', mind: { rethinkingThreshold: 0 }, ...specs.Ada })
 		.addCharacter({ id: 'Bram', ...specs.Bram })
 		.addCharacter({ id: 'Cy', mind: { rethinkingThreshold: 0 }, ...specs.Cy });
@@ -172,6 +175,30 @@ describe('who knows whom', () => {
 		assert.deepEqual(director.getAcquaintance()!.of('Cy', 'Ada'), [Knows.Look]);
 		assert.deepEqual(director.getAcquaintance()!.of('Bram', 'Cy'), []);
 		director.dispose();
+	});
+
+	it('knows the voices its spec says, by rules of who knows whom or by none', async () => {
+		for (const rules of [{}, undefined]) {
+			for (const knows of [{ Bram: true as const }, undefined]) {
+				// Bram speaks with his back to her: a voice she never saw speak is a stranger's.
+				const director = await scene(rules, { Ada: { knows } }, { Bram: [0, -1] }).connect();
+				director.getTalk()!.say('Bram', 'Still here.', 'Ada', 1);
+				assert.equal(director.character('Ada')!.mind!.events().at(-1)?.text, `${knows ? 'Bram' : 'VoiceA'} says to you: "Still here."`, `rules: ${!!rules}`);
+				director.dispose();
+			}
+		}
+	});
+
+	it('knows as a collective what its characters\' specs say, and by rules its characters know each other wholly', async () => {
+		for (const rules of [{}, undefined]) {
+			const director = await scene(rules, { Cy: { knows: { Ada: [Knows.Voice] } } }).addCollective({ id: 'Pair', mind: {} }).connect();
+			const pair = director.collective('Pair')!;
+			director.character('Bram')!.collective = pair;
+			director.character('Cy')!.collective = pair;
+			assert.deepEqual([...pair.persona.names.knows('Ada')].sort(), rules ? [Knows.Voice] : [Knows.Look, Knows.Name, Knows.Voice]);
+			assert.deepEqual([...director.character('Bram')!.persona.names.knows('Cy')].sort(), rules ? [Knows.Look, Knows.Name, Knows.Voice] : [Knows.Look, Knows.Name]);
+			director.dispose();
+		}
 	});
 
 	it('learns what the host introduces', async () => {

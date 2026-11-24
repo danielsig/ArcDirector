@@ -6,11 +6,19 @@
 export const Feeling = { Happy: 'happy', Sad: 'sad', Angry: 'angry', Afraid: 'afraid', Surprised: 'surprised', Disgusted: 'disgusted', Stressed: 'stressed', Loving: 'loving' } as const;
 export type Feeling = (typeof Feeling)[keyof typeof Feeling] | (string & {});
 
+/** A value for some feelings, by name: the stock {@link Feeling}s, and any a game names. */
+export type FeelingMap<T> = { readonly [F in Feeling]?:T };
+
 /**
  * How strongly each feeling is felt, 0 to 1, by name: several at once (a surprise gift, happy and surprised; a roller
  * coaster, happy and stressed; paranoia, afraid and stressed).
  */
-export type FeelingLevels = Readonly<Record<string, number>>;
+export type FeelingLevels = FeelingMap<number>;
+
+/** The feelings `map` holds a value for, each with it: none for `undefined`. */
+export function feelingsIn<T>(map:FeelingMap<T> | undefined):[Feeling, T][] {
+	return Object.entries(map ?? {}).filter((entry):entry is [Feeling, T] => entry[1] !== undefined);
+}
 
 /**
  * What a feeling is in words: how one showing it looks to onlookers (`looking angry`), and how its voice says a line
@@ -27,10 +35,10 @@ export interface FeelingDef {
 /** A character's mood, as recall reads it: how strongly it feels each feeling, and every feeling's `memories` to tell its own by. */
 export interface Mood {
 	levels:FeelingLevels;
-	memories:Readonly<Record<string, readonly string[]>>;
+	memories:FeelingMap<readonly string[]>;
 }
 
-export const FEELINGS:Readonly<Record<(typeof Feeling)[keyof typeof Feeling], FeelingDef>> = {
+export const FEELINGS = Object.freeze({
 	happy: {
 		looking: 'happy',
 		adverb: 'happily',
@@ -103,10 +111,6 @@ export const FEELINGS:Readonly<Record<(typeof Feeling)[keyof typeof Feeling], Fe
 			'Just thinking of it makes my skin crawl.',
 		],
 	},
-	// Told apart from the rest as well as they are from each other, afraid and surprised too, on three embedding models.
-	// Arousal under pressure, thrilling as well as grim, and the keyed-up watchfulness of a sentry. A gun at the chest is
-	// left to afraid: with it, stress swallowed fear's memories. Two watchful anchors in four of stress catch watches 23
-	// times in 30 (stress alone, 11) and leave the other seven as they were, on three embedding models.
 	stressed: {
 		looking: 'stressed',
 		adverb: 'tensely',
@@ -119,9 +123,6 @@ export const FEELINGS:Readonly<Record<(typeof Feeling)[keyof typeof Feeling], Fe
 			'I held my breath and listened for the footsteps again.',
 		],
 	},
-	// Warmth and care toward someone, a stranger and an enemy too (compassion, sympathy), apart from happy: told apart from
-	// the rest on three embedding models, it tells compassion from emptiness and resignation, and affection from joy. With
-	// the strangers in, care for strangers read as loving 3 to 7 times in 8 (family and friends alone, 1 to 3).
 	loving: {
 		looking: 'fond',
 		adverb: 'warmly',
@@ -134,4 +135,4 @@ export const FEELINGS:Readonly<Record<(typeof Feeling)[keyof typeof Feeling], Fe
 			'I sat with the grieving widow all night and felt her sorrow as if it were my own.',
 		],
 	},
-};
+} satisfies FeelingMap<FeelingDef>);

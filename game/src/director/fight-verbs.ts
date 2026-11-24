@@ -121,6 +121,8 @@ function dropDown(host:GameHost, who:GameObject):void {
 	host.arc?.pushEvent({
 		kind: 'Hurt',
 		text: (name) => `${name(idOf(who))} has fallen`,
+		// A scene that tells it to more minds (a party out of sight) replaces it, so no mind is told twice.
+		key: `fallen:${id}`,
 		tags: ['fallen'],
 		// A fall changes the fight: 5v5 commanders think on it instead of a rethink.
 		major: true,

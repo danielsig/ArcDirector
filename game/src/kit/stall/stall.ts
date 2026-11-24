@@ -26,10 +26,10 @@ const STALL_STYLES:Record<string, StallStyle> = {
 };
 
 /** A shop counter's look, by its def: the boards, the front panels' paint, and what lines the front. */
-type CounterStyle = { wood:number; shelf?:boolean; bench?:boolean };
+type CounterStyle = { wood:number; shelf?:boolean };
 
 const COUNTER_STYLES:Record<string, CounterStyle> = {
-	counter_apothecary: { wood: 0x3e2a1e, shelf: true, bench: true },
+	counter_apothecary: { wood: 0x3e2a1e, shelf: true },
 	counter_toys: { wood: 0xc49a5a, shelf: true },
 };
 
@@ -212,21 +212,12 @@ function createCounterMesh(style:CounterStyle, length:number, wares:readonly str
 	// The body: a closed box under a thick top that overhangs on the customer's side.
 	add(mergeParts([
 		{ geo: bevelBox(width + 0.16, 0.08, STALL_D + 0.16, 0.02), y: COUNTER_H - 0.04, z: cz + 0.02 },
-		...style.bench // A bench for customers
-			? [
-				// the counter
-				{ geo: box(width, 0.8, 0.05), y: 0.4, z: cz - STALL_D * 0.5 },
-				{ geo: box(0.05, 0.8, STALL_D), x: -width * 0.5, y: 0.4, z: cz },
-				{ geo: box(0.05, 0.8, STALL_D), x: width * 0.5, y: 0.4, z: cz },
-				// the bench
-				{ geo: box(width + 0.05, 0.4, BENCH_DEPTH), y: 0.2, z: BENCH_Z },
-			]
-			: [ { geo: box(width, COUNTER_H - 0.08, STALL_D), y: (COUNTER_H - 0.08) * 0.5, z: cz } ],
+		{ geo: box(width, COUNTER_H - 0.08, STALL_D), y: (COUNTER_H - 0.08) * 0.5, z: cz },
 		...style.shelf // A shelf behind the counter
 			? [ { geo: box(width, 0.04, 0.2), y: 0.6, z: cz - STALL_D * 0.5 - 0.1 } ]
 			: [],
 	]), boards);
-	placeWares(g, wares, style.bench);
+	placeWares(g, wares);
 	g.scale.setScalar(STALL_SCALE);
 	return g;
 }
@@ -309,11 +300,13 @@ function spawnStall(world:DemoWorld, chunk:DemoChunk, run:ChunkEntity[]):void {
 	go.transform.yaw = ent.yaw ?? stallYaw(ent.localZ);
 	const counter = COUNTER_STYLES[ent.def];
 	const style = counter ?? STALL_STYLES[ent.def]!;
+	// Only a stall seats customers; a shop counter has no bench.
+	const benched = !counter && !!STALL_STYLES[ent.def]!.bench;
 	const width = counter ? end - start : STALL_COUNTER.w;
 	// Solid from the shelf behind the counter, or the counter's back, out to the bench's front, or the counter's: nobody walks through any.
 	const middle = COUNTER_Z * STALL_SCALE;
 	const back = middle - STALL_COUNTER.d / 2 - (style.shelf ? 0.15 : 0);
-	const front = style.bench ? (BENCH_Z + BENCH_DEPTH / 2) * STALL_SCALE : middle + STALL_COUNTER.d / 2;
+	const front = benched ? (BENCH_Z + BENCH_DEPTH / 2) * STALL_SCALE : middle + STALL_COUNTER.d / 2;
 	const wares = ent.on ?? [];
 	register(go.id, () => (counter ? createCounterMesh(counter, width, wares) : createStallMesh(STALL_STYLES[ent.def]!, wares)));
 	go.addComponent(DemoMeshRenderer, { meshID: go.id });
@@ -321,14 +314,14 @@ function spawnStall(world:DemoWorld, chunk:DemoChunk, run:ChunkEntity[]):void {
 	solid.parent = go;
 	solid.transform.localPosition = { x: 0, y: STALL_COUNTER.h * 0.5, z: (back + front) / 2 };
 	solid.addComponent(BoxCollider, { size: { x: width, y: STALL_COUNTER.h, z: front - back } });
-	if (style.bench) {
+	if (benched) {
 		// Customers sit on it side by side, facing the counter: as many as its width fits.
 		const bench = new GameObject(`${ent.name ?? go.id}Bench`, 'Bench');
 		bench.parent = go;
 		bench.transform.localPosition = { x: 0, y: 0, z: BENCH_Z * STALL_SCALE };
 		bench.transform.yaw = go.transform.yaw + Math.PI;
 		bench.addComponent(Named, { id: bench.id });
-		const seat = counter ? width + 0.05 * STALL_SCALE : STALL_BENCH_W * STALL_SCALE;
+		const seat = STALL_BENCH_W * STALL_SCALE;
 		bench.addComponent(Furniture, { kind: 'chair', places: Math.floor(seat / PLACE_WIDTH), width: seat });
 		bench.addComponent(Servings, { wares });
 	}

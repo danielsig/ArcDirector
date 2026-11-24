@@ -1,9 +1,9 @@
 import type { NamingText } from '../character/text-with-ids.js';
 import type { ArcResult } from '../arc/arc-types.js';
 import { blockedReason, findRoute, noWayTo, pointGoal, type Route, type RouteGoal } from './route.js';
-import type { HostWorld, Vec } from './world-types.js';
+import { Medium, type HostWorld, type Vec } from './world-types.js';
 import { groundAxes, rightOf } from './axes.js';
-import { axesOf, reachTo } from './lookup.js';
+import { axesOf, clarityOf, reachTo } from './lookup.js';
 import { add, distance, dot, sub, unit } from './vec.js';
 
 /**
@@ -78,11 +78,14 @@ type Errand = {
 	toPlace:boolean;
 	/**
 	 * First in line: going round to the line's back; walking in along the line to the serving spot, which it keeps to
-	 * wherever it strays; or, short of the spot and out of reach, stepping straight on to it, still first.
+	 * wherever it strays; or, from the line's back, half a pace off the spot or where its route ends, stepping straight
+	 * on to it.
 	 */
 	front?:'joining' | 'walking' | 'stepping';
 	/** The serving spot it steps on to, never past. */
 	spot?:Vec;
+	/** No way there: how it fails once it has come as near as it can. */
+	noWay?:ArcResult;
 	done:(result:ArcResult)=>void;
 };
 
@@ -90,7 +93,7 @@ type Errand = {
  * Where a crowd puts one of its own: the point to head for, whether to wait there (not its turn) or go on in, and the
  * first in line's way in (`Errand.front`).
  */
-type Place = { point:Vec; waiting:boolean; front?:'joining' | 'walking' };
+type Place = { point:Vec; waiting:boolean; front?:Errand['front'] };
 
 const CHECK_EVERY = 0.25;
 const REPLAN_EVERY = 2;
@@ -226,10 +229,17 @@ export class Mover {
 		}
 		const { goal, dest, within } = aim;
 		const place = dest && this.place(id, e, me, dest, aim.facing, within, (aim.size ?? this._spacing() / 2) + (pose?.size ?? this._spacing() / 2));
+		// In reach before its first step and in its turn, it stays put: one who orders from where it sits is not walked off.
+		if (e.plannedAt === -Infinity && !place?.waiting && goal.reached(me)) {
+			return this.arrive(id, e, character, now);
+		}
+		if (place?.front === 'stepping') {
+			this.startStepping(e, place.point, now);
+		}
 		e.front = place?.front ?? e.front;
 		// In reach counts only in its turn, and with a place of its own, once there: else it stops wherever reach begins,
-		// on top of the last to get there. In reach before its first step, it stays put.
-		const settled = !place || e.plannedAt === -Infinity || distance(me, place.point) <= this._spacing() / 2;
+		// on top of the last to get there. A line's first who walks up is served on the spot, never where reach begins.
+		const settled = !place || (e.crowd !== 'line' && distance(me, place.point) <= this._spacing() / 2);
 		if (e.opts.check && now - e.checkedAt >= CHECK_EVERY) {
 			e.checkedAt = now;
 			const met = e.opts.check();
@@ -237,11 +247,11 @@ export class Mover {
 				return { status: 'ok', verb: e.verb, reason: met };
 			}
 		}
-		if (!place?.waiting && settled && goal.reached(me)) {
-			return this.arrive(id, e, character, now);
-		}
 		if (e.front === 'stepping') {
 			return this.stepIn(id, e, character, me, dest!, now);
+		}
+		if (!place?.waiting && settled && goal.reached(me)) {
+			return e.noWay ?? this.arrive(id, e, character, now);
 		}
 		const toward = place?.point ?? dest;
 		const target = 'target' in e.dest ? e.dest.target : undefined;
@@ -281,14 +291,11 @@ export class Mover {
 				if (place && (place.waiting || e.crowd !== 'line')) {
 					return this.stand(e, character, place.point, now);
 				}
-				if (place && !goal.reached(me)) {
-					e.front = 'stepping';
-					e.spot = place.point;
-					e.bestGap = Infinity;
-					e.bestAt = now;
+				if (place) {
+					this.startStepping(e, place.point, now);
 					return this.stepIn(id, e, character, me, dest!, now);
 				}
-				return this.arrive(id, e, character, now);
+				return e.noWay ?? this.arrive(id, e, character, now);
 			}
 			const end = straightEnd(route.points, e.next);
 			const waypoint = route.points[end];
@@ -340,9 +347,9 @@ export class Mover {
 
 	/**
 	 * Its place in line, first come first. The first stands at the target's serving spot, which it walks in to along
-	 * the line, from its back when it comes from off to the side, so it ends facing the target; where its route
-	 * stops short, it steps on to the spot or into reach, never past the spot. The rest wait one behind another out
-	 * past the spot.
+	 * the line, from its back when it comes from off to the side, so it ends facing the target; from the line's back,
+	 * half a pace off the spot, or where its route stops short, it steps on to the spot, in reach or not, never past
+	 * it. The rest wait one behind another out past the spot.
 	 */
 	private linePlace(id:string, e:Errand, target:string, crowd:[string, Errand][], me:Vec, dest:Vec, facing:Vec | undefined, ahead:number):Place | undefined {
 		const rank = crowd.findIndex(([other]) => other === id);
@@ -357,12 +364,14 @@ export class Mover {
 		const spot = this._servingSpot(target);
 		const at = add(add(dest, faces, spot?.ahead ?? ahead), rightOf(faces, axes) ?? faces.map(() => 0), spot?.aside ?? 0);
 		const way = unit(sub(at, dest)) ?? faces;
-		// In front of the spot or at the line's back, it walks in; elsewhere, even on the spot, it goes round to the back first.
+		// In front of the spot or at the line's back, it walks in, and from the back or half a pace off the spot it steps in
+		// straight; elsewhere, even on the spot, it goes round to the back first.
 		const off = unit(sub(me, at));
-		const atBack = ():boolean => distance(me, add(at, way, this._spacing())) <= this._spacing() / 2;
-		const front = rank > 0 ? undefined : e.front === 'walking' || (off && dot(off, way) >= LINE_IN) || atBack() ? 'walking' : 'joining';
+		const atBack = distance(me, add(at, way, this._spacing())) <= this._spacing() / 2;
+		const walksIn = e.front === 'walking' || (off && dot(off, way) >= LINE_IN) || atBack;
+		const front = rank > 0 ? undefined : !walksIn ? 'joining' : atBack || distance(me, at) <= this._spacing() / 2 ? 'stepping' : 'walking';
 		// While the first goes round to the back, the rest stand a place further out, clear of it.
-		const back = rank > 0 ? rank + (crowd[0][1].front === 'joining' ? 1 : 0) : front === 'walking' ? 0 : 1;
+		const back = rank > 0 ? rank + (crowd[0][1].front === 'joining' ? 1 : 0) : front === 'joining' ? 1 : 0;
 		return { point: add(at, way, back * this._spacing()), waiting: back > 0, front };
 	}
 
@@ -411,11 +420,19 @@ export class Mover {
 		return e.slot && { point: pointOf(e.slot.ring, e.slot.index), waiting: e.slot.ring > 0 };
 	}
 
+	/** First in line, from here on stepping in onto `spot`. */
+	private startStepping(e:Errand, spot:Vec, now:number):void {
+		e.front = 'stepping';
+		e.spot = spot;
+		e.bestGap = Infinity;
+		e.bestAt = now;
+	}
+
 	/**
-	 * First in line, where its route to the serving spot ended (as near as the host's motor stops) but out of reach:
-	 * it steps on straight toward the target, off any route (the spot is the open side of what it serves), until in
-	 * reach or on the spot, whichever comes first, and never past it: the spot wins over reach, so it never presses
-	 * into whom it came to. As near as it gets, it is served all the same.
+	 * First in line, at the line's back, within half a pace of the serving spot or where its route there ended (as near
+	 * as the host's motor stops): it steps on straight toward the target, off any route (the spot is the open side of
+	 * what it serves), so it ends facing it, until on the spot, in reach or not, and never past it into whom it came to.
+	 * As near as it gets, it is served all the same.
 	 */
 	private stepIn(id:string, e:Errand, character:unknown, me:Vec, dest:Vec, now:number):ArcResult | undefined {
 		const gap = distance(me, dest);
@@ -475,12 +492,19 @@ export class Mover {
 		e.toPlace = toPlace;
 		e.next = 0;
 		e.route = undefined;
-		if (!route || 'blockers' in route) {
-			const why = route ? blockedReason(route) : '';
+		e.noWay = undefined;
+		if ('blockers' in route) {
+			const why = route.blockers.length > 0 ? blockedReason(route) : '';
 			const target = 'target' in e.dest ? e.dest.target : undefined;
 			const reason = 'goal' in e.dest ? e.dest.noWay(why) : target !== undefined ? noWayTo((name) => name(target), why) : why || 'no way there';
-			const by = route ? route.blockers.flatMap((b) => (b.by ? [b.by] : [])) : [];
-			return { status: 'failed', verb: e.verb, reason, unreachable: target, ...by.length > 0 ? { blockedBy: by } : {} };
+			const by = route.blockers.flatMap((b) => (b.by ? [b.by] : []));
+			const failed:ArcResult = { status: 'failed', verb: e.verb, reason, unreachable: target, ...by.length > 0 ? { blockedBy: by } : {} };
+			// It still goes as near as it can when it sees where it heads from there, and fails there.
+			if (dest && !toPlace && !e.opts.sticky && clarityOf(this._world!, Medium.Light, route.nearest.points.at(-1) ?? me, dest) > 0) {
+				[e.route, e.noWay] = [route.nearest, failed];
+				return undefined;
+			}
+			return failed;
 		}
 		e.route = route;
 		return undefined;

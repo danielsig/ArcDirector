@@ -87,8 +87,8 @@ const LAMP_STAY = 3;
  * compile time, and spares a recompile when a lamp is lit.
  */
 const SPARE_LIGHTS = 2;
-/** Meters a lamp moves before its still map bakes again. */
-const LAMP_MOVED = 0.1;
+/** Meters what holds a lamp (a spot: the light) moves before its still map bakes again; a lamp's flicker moves only the light. */
+const LAMP_MOVED = 0.001;
 /** Meters of slack around the still scene in the sun's map. */
 const SUN_PAD = 1;
 
@@ -270,9 +270,10 @@ export class ShadowCache {
 		for (const { lamp, at } of casting) {
 			lamp.castShadow = true;
 			const maps = this.mapsOf(lamp, frame);
-			// A flickering lamp jitters a centimeter or so; it bakes again only once it has truly moved.
-			if (!maps.still || maps.at.distanceTo(at) > LAMP_MOVED || changed.some((s) => s.distanceToPoint(at) < reachOf(lamp))) {
-				maps.at.copy(at);
+			// A flickering lamp jitters a centimeter or so within what holds it; it bakes again as soon as that moves (carried).
+			const held = lamp.parent?.getWorldPosition(new THREE.Vector3()) ?? at;
+			if (!maps.still || maps.at.distanceTo(held) > LAMP_MOVED || changed.some((s) => s.distanceToPoint(at) < reachOf(lamp))) {
+				maps.at.copy(held);
 				bake.push(lamp);
 			}
 			if (busy.has(lamp)) {

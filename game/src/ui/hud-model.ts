@@ -44,7 +44,7 @@ export type HudSpeech = {
 };
 
 /** Item defs drawn as tiny icons over the heads of whoever carries them (`Scene.carried`). */
-export const CARRY_ICONS = ['fire_mushroom', 'moon_mushroom', 'silver_trout', 'brass_key', 'iron_key'] as const;
+export const CARRY_ICONS = ['fire_mushroom', 'moon_mushroom', 'silver_trout', 'cooked_trout', 'burnt_trout', 'brass_key', 'iron_key'] as const;
 
 export type HudPickup = {
 	name:string;

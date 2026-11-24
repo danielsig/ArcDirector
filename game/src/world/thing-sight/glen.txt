@@ -1,5 +1,7 @@
+Bedroll [furniture bed] {"id":"Bedroll","tags":["furniture","bed"],"interactable":true,"interesting":1,"movable":false} Bedroll is a bed.
 Bridge [bridge landmark] {"id":"Bridge","tags":["bridge","landmark"],"interactable":true,"interesting":1,"note":"it is raised","state":{"position":"raised"},"always":true,"movable":false} Bridge is a bridge, raised: no one can cross until it is lowered.
 BridgeLever [sluice landmark] {"id":"BridgeLever","tags":["sluice","landmark"],"interactable":true,"interesting":1,"movable":false} BridgeLever is the fixed lever that raises and lowers the bridge. Working it again does the other.
+Campfire [fire cooking] {"id":"Campfire","tags":["fire","cooking"],"interactable":true,"interesting":1,"note":"the spit is empty","state":{"spit":"empty"},"movable":false} Campfire is a cooking fire with a spit over it, empty.
 Cottage [building house landmark] {"id":"Cottage","tags":["building","house","landmark"],"interactable":true,"interesting":1,"movable":false} Cottage is nothing out of the ordinary.
 CottageBed [furniture bed] {"id":"CottageBed","tags":["furniture","bed"],"interactable":true,"interesting":1,"movable":false} CottageBed is a bed.
 CottageBookshelf [chest furniture] {"id":"CottageBookshelf","tags":["chest","furniture"],"interactable":true,"interesting":1,"state":{"lid":"open"},"movable":false} CottageBookshelf is a bookshelf.

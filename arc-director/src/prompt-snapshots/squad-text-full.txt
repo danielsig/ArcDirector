@@ -87,7 +87,7 @@ command(units.filter("Guard")) {
 command(units.filter("Scout")) {
 	go_to(EastGate) && wait(5)
 }
-You are CapSquad. Role: Rifleman.
+You are Cap. Role: Rifleman.
 
 Steps run in order: each starts once the one before has ended. && runs the next only if it succeeded, || only if it failed. A while B runs B during A: go_to(Gate) while say("This way") speaks while walking. B can be a block: follow(Bram) while { say("Come") ; say("Hurry") }. What comes after arriving goes on the next line:
 go_to(Gate) while say("This way")

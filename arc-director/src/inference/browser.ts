@@ -1,6 +1,7 @@
 import { HttpProvider, type ModelSettings } from './http.js';
 import { ModelDownload, type DownloadProgress } from './download.js';
 import { ggufMetadata } from './gguf.js';
+import { contextPerSlot } from './LMStudioLoader.js';
 import type { ChatRequest, ChatResponse, InferenceProvider } from './provider.js';
 import { JevSystemOne } from './system-one.js';
 import { showLoadingBar, type LoadingBarOptions } from './loading-bar.js';
@@ -38,8 +39,10 @@ export function browserModelURL(model:Skaldic | string):string {
 /** What {@link Wllama} runs for a model with no id: Skaldic Gemma 4 E4B. */
 export const DEFAULT_BROWSER_MODEL = SKALDIC_BROWSER_MODELS[Skaldic.Gemma4E4B];
 
-/** Tokens each think may fill when the model's spec names no `contextLength`. */
+/** Tokens a model's context holds, all its thinks together, when its spec names no `contextLength`. */
 const DEFAULT_CONTEXT = 8192;
+/** llama.cpp holds each think's share of the context in whole blocks of this many tokens, rounding a share up. */
+const CONTEXT_BLOCK = 256;
 
 /**
  * What this provider uses of wllama (`@wllama/wllama`, an optional peer dependency imported on first use): llama.cpp's
@@ -326,8 +329,8 @@ export class BrowserProvider implements InferenceProvider {
 	}
 
 	/**
-	 * `model` on the GPU, as its settings say, loading it in place of the last one unless it is there already. Each
-	 * of its parallel thinks gets the whole `contextLength`, up to its {@link contextCap}.
+	 * `model` on the GPU, as its settings say, loading it in place of the last one unless it is there already. Its
+	 * parallel thinks share its `contextLength` ({@link contextToLoad}).
 	 */
 	private load(model:string, report?:(progress:DownloadProgress)=>void, signal?:AbortSignal):Promise<WllamaEngine> {
 		const key = JSON.stringify(this.params(model));
@@ -372,14 +375,19 @@ export class BrowserProvider implements InferenceProvider {
 		return ready;
 	}
 
+	/** Tokens each of `model`'s parallel thinks holds as it loads ({@link params}): held to its GGUF's cap once that is known. */
+	public slotContext(model:string):number {
+		const { n_ctx, n_parallel } = this.params(model);
+		return n_ctx / n_parallel;
+	}
+
 	/** What `model` loads with, as its settings and its {@link contextCap} say. */
 	private params(model:string):LoadParams {
 		const settings = this._settings.get(model);
 		// llama.cpp's `LLAMA_MAX_SEQ`: the engine fails to load with more.
 		const parallel = Math.min(256, Math.max(1, settings?.maxParallel ?? 1));
-		const context = Math.min(settings?.contextLength ?? DEFAULT_CONTEXT, this._caps.get(model) ?? Infinity);
 		return {
-			n_ctx: context * parallel,
+			n_ctx: contextToLoad(settings?.contextLength ?? DEFAULT_CONTEXT, parallel, this._caps.get(model)),
 			n_parallel: parallel,
 			kv_unified: false,
 			n_batch: 2 * PROMPT_CHUNK,
@@ -510,9 +518,9 @@ export class Wllama extends ModelProvider {
 		return this;
 	}
 
-	/** Each of its parallel thinks gets the whole `contextLength` ({@link BrowserProvider}'s load). */
-	protected override slotContext(contextLength:number):number {
-		return contextLength;
+	/** What the page loads per think ({@link BrowserProvider.slotContext}). */
+	protected override slotContext(id:string):number {
+		return engineFor(id).slotContext(id);
 	}
 
 	protected override catalog():Promise<ModelInfo[]> {
@@ -638,10 +646,22 @@ function tooSlow(perSecond:number):string {
 }
 
 /**
- * The most tokens one think's cache may hold, from a model's GGUF metadata, or null when it does not say: past it,
- * moving a reused cached chunk re-ropes the cache in one ggml-webgpu dispatch of more workgroups than WebGPU allows
- * (`Dispatch workgroup count X (65536) exceeds max compute workgroups per dimension (65535)`), which kills the engine.
- * ggml-webgpu does not split that dispatch (wllama 3.8.1). A whole number of reuse chunks: 16 128 for the default browser model.
+ * Tokens a model's cache holds in all (`n_ctx`): `contextLength`, at most `cap` ({@link contextCap}), split evenly among
+ * its `parallel` thinks as LM Studio splits it ({@link contextPerSlot}), each share rounded down to whole
+ * {@link CONTEXT_BLOCK}s, since llama.cpp would round it up past the cap. Each share is one block at least, so past
+ * `cap / CONTEXT_BLOCK` thinks the whole goes over the cap.
+ */
+export function contextToLoad(contextLength:number, parallel:number, cap:number | null = null):number {
+	const share = contextPerSlot(Math.min(contextLength, cap ?? Infinity), parallel);
+	return Math.max(1, Math.floor(share / CONTEXT_BLOCK)) * CONTEXT_BLOCK * parallel;
+}
+
+/**
+ * The most tokens a model's cache may hold, all its thinks together, from its GGUF metadata, or null when it does not
+ * say: past it, moving a reused cached chunk re-ropes the whole cache, every think's share, in one ggml-webgpu dispatch
+ * of more workgroups than WebGPU allows (`Dispatch workgroup count X (65536) exceeds max compute workgroups per
+ * dimension (65535)`), which kills the engine. ggml-webgpu does not split that dispatch (wllama 3.8.1). A whole number
+ * of reuse chunks: 16 128 for the default browser model.
  */
 export function contextCap(meta:ReadonlyMap<string, string | number>):number | null {
 	const arch = meta.get('general.architecture');

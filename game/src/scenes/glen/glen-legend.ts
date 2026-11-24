@@ -8,6 +8,9 @@ function water(flow:XZ = { x: 0, z: 0 }):TerrainLegend {
 	return { def: 'water', height: 0, blocked: true, flow };
 }
 
+/** A glen tree: a broadleaf wood, a pine here and there. */
+const TREE:EntityLegend = { kind: 'entity', def: 'tree', over: '.', pines: 0.25 };
+
 export const GLEN_LEGEND:Record<string, TerrainLegend | EntityLegend> = {
 	/** The cliff on the west side, as high as the waterfall pours from. */
 	'#': { def: 'cliff', height: CLIFF, blocked: true },
@@ -32,7 +35,11 @@ export const GLEN_LEGEND:Record<string, TerrainLegend | EntityLegend> = {
 	'3': water({ x: 1, z: 1 }),
 	'7': water({ x: -1, z: -1 }),
 	'9': water({ x: 1, z: -1 }),
-	'*': { kind: 'entity', def: 'tree', over: '.' },
+	'*': TREE,
+	/** The mushroom wood grows outward into the glen: its outermost trees are young (`Y`), the next ones half grown (`y`), a sapling here and there (`Q`). */
+	'Q': { ...TREE, age: 0.1 },
+	'Y': { ...TREE, age: 0.3 },
+	'y': { ...TREE, age: 0.65 },
 	'o': { kind: 'entity', def: 'boulder', over: '.' },
 	/**
 	 * Boulders standing in the still pool under the waterfall: ripples all round (`O`), or trailing a little east in
@@ -64,6 +71,16 @@ export const GLEN_LEGEND:Record<string, TerrainLegend | EntityLegend> = {
 	'L': { kind: 'entity', def: 'bridge_lever', over: '.', works: 'Bridge' },
 	'=': { kind: 'entity', def: 'bridge_span', over: '>' },
 	'W': { kind: 'entity', def: 'waterfall', over: '~' },
+	// The forager's camp in a clearing in the woods, by the mushrooms: a lean-to open to the fire, a bedroll under it, a woodpile
+	// and a basket for the day's mushrooms. The spit runs east–west.
+	'f': { kind: 'entity', def: 'campfire', over: '.', yaw: 0, offset: { x: 0, z: -0.4 } },
+	'l': { kind: 'entity', def: 'leanTo', over: '.', yaw: 0 },
+	/** Under the lean-to, in the cell north of it, its head to the west. */
+	'r': { kind: 'entity', def: 'bedroll', over: '.', yaw: Math.PI / 2, offset: { x: 0, z: -0.9 } },
+	// Beside the lean-to's west post, logs running north–south.
+	'w': { kind: 'entity', def: 'woodpile', over: '.', yaw: Math.PI / 2, offset: { x: -0.25, z: -0.5 } },
+	// Beside its east post.
+	's': { kind: 'entity', def: 'basket', over: '.', offset: { x: 0.25, z: 0.1 } },
 	'm': { kind: 'entity', def: 'fire_mushroom', over: '.', wild: true },
 	'n': { kind: 'entity', def: 'moon_mushroom', over: '.', wild: true },
 	'@': { kind: 'entity', def: 'player_start' },

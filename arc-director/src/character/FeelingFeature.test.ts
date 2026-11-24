@@ -8,14 +8,14 @@ import '../director/shortcuts.js';
 import { dummyEntity } from '../expr/natives.js';
 import type { SpeechUtterance } from '../mind/talk.js';
 import { sleep } from '../turn.js';
-import { Feeling, type FeelingDef } from './feeling.js';
+import { Feeling, type FeelingDef, type FeelingMap } from './feeling.js';
 
 type Ctx = { id:string };
 
 const CAST = ['Ash', 'Angler', 'Wolf'];
 
 /** Ash, a mind that sees Angler (3/12 hp) and hears everyone; Angler and Wolf, no minds. Every prompt, line and feeling told is kept. */
-async function staged(feelings?:Record<string, FeelingDef>):Promise<{
+async function staged(feelings?:FeelingMap<FeelingDef>):Promise<{
 	director:ArcDirector<Ctx>;
 	prompts:string[];
 	spoken:SpeechUtterance[];
@@ -131,7 +131,7 @@ describe('FeelingFeature', () => {
 		const { director, prompts } = await staged();
 		director.getFeelings()!.express('Ash', 'sad');
 		director.tick(1);
-		assert.match(await firstPrompt(prompts), /\nYou feel sad: say any line in that mood, and do as you would anyway\.\n/);
+		assert.match(await firstPrompt(prompts), /\nYou feel sad: say what you would say in that mood, and do as you would anyway\.\n/);
 		director.getFeelings()!.configure({ feel: (id, feeling) => (feeling === 'sad' ? undefined : `${id} is ${feeling}.`) });
 		prompts.length = 0;
 		await director.character('Ash')!.mind!.thinkNow({ enact: false });
@@ -180,7 +180,7 @@ describe('FeelingFeature', () => {
 		assert.equal(feelings.of('Ash'), 'stressed', 'the strongest');
 		const stirred = feelings.stirredOf('Ash');
 		assert.deepEqual(Object.keys(stirred), ['happy', 'stressed']);
-		assert.ok(Math.abs(stirred.stressed - 0.4) < 1e-9, 'what a memory kept now is kept with: not the standing part');
+		assert.ok(Math.abs(stirred.stressed! - 0.4) < 1e-9, 'what a memory kept now is kept with: not the standing part');
 		director.tick(20);
 		assert.deepEqual(feelings.levelsOf('Ash'), { afraid: 0.3, stressed: 0.3 }, 'faded back to standing');
 		assert.equal(feelings.of('Ash'), undefined);

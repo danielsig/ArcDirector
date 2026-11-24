@@ -31,6 +31,10 @@ export type EntityLegend = {
 	chimney?:boolean;
 	/** Radians. Turns a prop glyph or a stall; otherwise it faces off a wall it stands against. */
 	yaw?:number;
+	/** How grown a tree is, 0 a sapling to 1 (when unset) full grown: a young one at the edge of a wood is slender and short. */
+	age?:number;
+	/** What share of trees are pines, 0 to 0.5 (every other cell, when unset); oaks grow in place of the rest. */
+	pines?:number;
 	/** Meters (world X, Z) a prop glyph stands off its cell's center: a chair drawn up to a table, oars on a wall. */
 	offset?:{ x:number; z:number, y?:number };
 	/** A rock in water: how its ripples trail. Omitted, the current draws them, or in still water they spread all round. */

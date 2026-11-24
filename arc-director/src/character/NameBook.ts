@@ -78,7 +78,8 @@ export type NameBookJSON = {
  * make out it labels by kind ({@link vague}): a name to act on that tells nothing of who it is. A voice it cannot place
  * goes by a name of its own the same way ({@link hear}): sight and sound name apart until it sees them speak. What it
  * knows of each character, their look, voice and name ({@link Knows}), it holds apart, learned in play ({@link learn})
- * and given by rules ({@link knowsByRule}): one whose look it knows but not whose it is goes by a label ({@link STRANGER}).
+ * and given by rules ({@link knowsByRule}) and its persona's spec ({@link knowsBySpec}): one whose look it knows but not
+ * whose it is goes by a label ({@link STRANGER}).
  */
 export class NameBook {
 	private readonly _rows = new Map<string, NameRow>();
@@ -100,9 +101,15 @@ export class NameBook {
 	 */
 	public knowsByRule:((id:string)=>readonly Knows[]) | undefined;
 
-	/** Each way it knows `id`: by rule ({@link knowsByRule}), and as it learned them. */
+	/**
+	 * What its persona's spec says it knows of `id` (`PersonaSpec.knows`), added to what the rules give, so a voice known
+	 * by spec ties to the same name as the look.
+	 */
+	public knowsBySpec:((id:string)=>readonly Knows[]) | undefined;
+
+	/** Each way it knows `id`: by rule ({@link knowsByRule}) and spec ({@link knowsBySpec}) as one, and as it learned them. */
 	private ways(id:string):ReadonlySet<Knows>[] {
-		return [new Set(this.knowsByRule?.(id) ?? KNOWS_BY_DEFAULT), ...this._knows.get(id) ?? []];
+		return [new Set([...this.knowsByRule?.(id) ?? KNOWS_BY_DEFAULT, ...this.knowsBySpec?.(id) ?? []]), ...this._knows.get(id) ?? []];
 	}
 
 	/** What it knows of `id`, tied or not. */

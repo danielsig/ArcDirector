@@ -191,7 +191,6 @@ export const SELLERS:Seller[] = [
 		shop: 'ToyShop',
 		square: 'south',
 		cell: [27, 29],
-		offset: { x: 0, z: 0.75 },
 		yaw: FACE_NORTH,
 		wallet: 9,
 		aliases: ['toy counter'],

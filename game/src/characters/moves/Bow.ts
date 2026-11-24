@@ -1,5 +1,5 @@
 import { chargeGlint, missPoint, RELEASE_GRACE, type Outcome } from '../../render/spell-fx';
-import { THREE, Time, closeHand, create, drawBow, humanBone, orientHand, reach, crouch, type GameObject, HeldProps, turnAboutGrip, cueAt, cueAtPoint, UP, heightOf, pointOn, PoseMove } from './pose-body';
+import { THREE, Time, closeHand, create, drawBow, holdAt, humanBone, orientHand, reach, crouch, type GameObject, HeldProps, cueAt, cueAtPoint, UP, heightOf, pointOn, PoseMove } from './pose-body';
 
 /**
  * A shot, archer already holding the arrow: the bow comes up drawn in `SHOT_DRAW` s (at most half
@@ -12,8 +12,8 @@ const SHOT_FOLLOW = 0.3;
 const SHOT_RECOVER = 0.7;
 /** The archer stands side-on, turned this far right (radians) so the bow shoulder leads. */
 const SHOT_SIDE_ON = 1.25;
-/** Draw length (anchor to bow hand) and the follow-through, as fractions of height. */
-const SHOT_DRAW_LENGTH = 0.4;
+/** Draw length (anchor to the bow's grip) and the follow-through, as fractions of height. */
+const SHOT_DRAW_LENGTH = 0.44;
 const SHOT_FOLLOW_BACK = 0.04;
 /** Arrows fly this fast (m/s). */
 const ARROW_SPEED = 28;
@@ -140,16 +140,14 @@ export class Bow extends PoseMove<Shot> {
 		const follow = loosed ? THREE.MathUtils.smoothstep(t, fired, fired + SHOT_FOLLOW) : 0;
 		const hand = anchor.clone().addScaledVector(aim, -SHOT_FOLLOW_BACK * height * follow);
 
-		// Bow arm straight along the line, elbow turned down, the fist closed upright round the handle
-		// (thumb up, palm in). The string hand at the anchor, its elbow back, a little low and out so
-		// the forearm clears the face, its palm toward the cheek.
-		reach(root, 'left', grip, weight, new THREE.Vector3(0, -1, 0));
-		orientHand(root, 'left', aim, right, weight);
+		// Bow arm straight along the line, elbow turned down, the bow upright with its string toward the archer and its
+		// back toward the target. The string hand at the anchor, its elbow back, a little low and out so the forearm clears
+		// the face, its palm toward the cheek.
+		holdAt(root, 'left', bow, { at: grip, turn: new THREE.Quaternion().setFromAxisAngle(UP, Math.atan2(flat.z, -flat.x)), elbow: grip.clone().sub(UP) }, weight);
 		reach(root, 'right', hand, weight, aim.clone().negate().addScaledVector(UP, -0.15).addScaledVector(right, 0.5));
 		orientHand(root, 'right', aim, right.clone().negate(), weight);
 		// Fingers hooked on the string while drawn, opening as it goes.
 		closeHand(root, 'right', 0.6 * weight * (1 - follow));
-		raiseBow(bow, flat, weight);
 		const fingers = humanBone(root, 'rightMiddleProximal');
 		const nock = !loosed && !cut && weight > 0.05 && fingers ? fingers.getWorldPosition(new THREE.Vector3()) : null;
 		drawBow(bow, nock);
@@ -230,20 +228,6 @@ export class Bow extends PoseMove<Shot> {
 			return true;
 		});
 	}
-}
-
-/**
- * Turns a held bow about its grip, `weight` of the way from how it hangs now (`HeldProps` sets that
- * each frame) to upright with its string toward the archer and its back toward `ahead` (flat,
- * world). Both ends stand upright, so the bow never swings flat on the way.
- */
-function raiseBow(bow:THREE.Object3D, ahead:THREE.Vector3, weight:number):void {
-	if (weight <= 0) {
-		return;
-	}
-	const back = ahead.clone().negate();
-	const upright = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(back, UP, new THREE.Vector3().crossVectors(back, UP)));
-	turnAboutGrip(bow, bow.getWorldQuaternion(new THREE.Quaternion()).slerp(upright, weight));
 }
 
 /** Puts an arrow model (fletching up its +Y, head at its origin) with its tail at `tail`, flying along `dir`. */

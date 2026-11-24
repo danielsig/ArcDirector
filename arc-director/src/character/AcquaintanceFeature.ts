@@ -1,5 +1,4 @@
 import type { ArcRunner } from './arc-runner.js';
-import type { Character } from './Character.js';
 import { KNOWS_ALL, Knows, type NameBook, type NameTarget } from './NameBook.js';
 import { displayName, joinTextWithIDs, voiceOf, type TextWithIDs } from './text-with-ids.js';
 import type { ArcDirector } from '../director/ArcDirector.js';
@@ -89,7 +88,7 @@ export class AcquaintanceFeature<TCtx = unknown> extends Feature<TCtx> {
 		this._ruled.clear();
 	}
 
-	/** What `observerID`, a character or a collective, knows of `targetID`: by the rules, and what it learned. */
+	/** What `observerID`, a character or a collective, knows of `targetID`: by the rules, by its spec, and what it learned. */
 	public of(observerID:string, targetID:string):Knows[] {
 		const runner = this.director.character(observerID) ?? this.director.collective(observerID);
 		return [...runner?.persona.names.knows(targetID) ?? this.ruled(observerID, targetID)];
@@ -155,7 +154,7 @@ export class AcquaintanceFeature<TCtx = unknown> extends Feature<TCtx> {
 		return mind && was && name && was !== name ? () => mind.pushEvent({ kind: 'learned', text: `You learned that ${was} is ${name}.`, knownBy: [learnerID], tags: ['learned'] }) : undefined;
 	}
 
-	/** What `observerID` knows of `targetID` by the rules: itself, its collective, its circles, its spec's `knows`, the `knows` rule. */
+	/** What `observerID` knows of `targetID` by the rules: itself, its collective, its circles, the `knows` rule (its spec's is its book's). */
 	private ruled(observerID:string, targetID:string):readonly Knows[] {
 		const key = `${observerID}>${targetID}`;
 		const had = this._ruled.get(key);
@@ -175,17 +174,17 @@ export class AcquaintanceFeature<TCtx = unknown> extends Feature<TCtx> {
 			return KNOWS_ALL;
 		}
 		if (collective) {
-			return union(collective.characters.map((character) => this.ruled(character.id, targetID)), collective.persona.knows, target);
+			return [...new Set(collective.characters.flatMap((character) => this.ruled(character.id, targetID)))];
 		}
 		const observer = this.director.character(observerID);
-		if (!observer || (observer.collective && observer.collective === target.collective) || this._circles.some((circle) => circle.some((e) => is(observer, e)) && circle.some((e) => is(target, e)))) {
+		if (!observer || (observer.collective && observer.collective === target.collective) || this._circles.some((circle) => circle.some((e) => observer.is(e)) && circle.some((e) => target.is(e)))) {
 			return KNOWS_ALL;
 		}
 		const director = this.director;
 		const told = this._knows?.({ id: observerID, get ctx() {
 			return director.contextOf(observerID);
 		} }, { id: targetID, tags: target.tags });
-		return union([told === true ? KNOWS_ALL : told || []], observer.persona.knows, target);
+		return told === true ? KNOWS_ALL : told || [];
 	}
 }
 
@@ -217,17 +216,6 @@ function nameAfter(spoken:string, name:string, frames:RegExp):boolean {
 
 function escape(text:string):string {
 	return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/** Whether `character` is what a circle's or a spec's entry names: it, its collective, or a tag it has. */
-function is<TCtx>(character:Character<TCtx>, entry:string):boolean {
-	return entry === character.id || entry === character.collective?.id || character.tags.includes(entry);
-}
-
-/** `lists` together, with what `spec` (a persona's `knows`) says of `target`. */
-function union<TCtx>(lists:readonly (readonly Knows[])[], spec:Readonly<Record<string, readonly Knows[] | true>> | undefined, target:Character<TCtx>):Knows[] {
-	const said = Object.entries(spec ?? {}).filter(([entry]) => is(target, entry)).map(([, knows]) => (knows === true ? KNOWS_ALL : knows));
-	return [...new Set([...lists, ...said].flat())];
 }
 
 declare module '../director/ArcDirector.js' {

@@ -90,10 +90,10 @@ describe('LMStudioLoader', () => {
 		assert.equal(contextPerSlot(8192, 4), 2048);
 		assert.equal(contextPerSlot(8192, undefined), 8192);
 		const lm = server({}, { maxParallel: 2 }).loader({ gemma: { contextLength: 8192, parallel: 4 } });
-		assert.equal(lm.slotContext('gemma'), undefined, 'not loaded yet');
+		assert.equal(lm.contextOf('gemma'), undefined, 'not loaded yet');
 		await lm.ensureReady('gemma');
 		assert.equal(lm.maxParallel.get('gemma'), 2);
-		assert.equal(lm.slotContext('gemma'), 4096, 'two slots, not the four asked for');
+		assert.deepEqual(lm.contextOf('gemma'), { whole: 8192, slot: 4096 }, 'two slots, not the four asked for');
 	});
 
 	it('loads nothing where the server has no model management, and counts a model a request JIT-loaded as loaded', async () => {
@@ -105,6 +105,6 @@ describe('LMStudioLoader', () => {
 		assert.equal(lm.hasReusable('gemma'), false);
 		lm.loadedByRequest('gemma');
 		assert.equal(lm.hasReusable('gemma'), true);
-		assert.equal(lm.slotContext('gemma'), undefined, 'how it was loaded is not known');
+		assert.equal(lm.contextOf('gemma'), undefined, 'how it was loaded is not known');
 	});
 });
